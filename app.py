@@ -50,9 +50,9 @@ def compute_indicators(df, price_override=None):
     import numpy as np
     
     cc = find_col(df, ['close', 'closeprice', 'close_price'])
-    hc = find_col(df, ['high', 'highprice', 'high_price'])
-    lc = find_col(df, ['low', 'lowprice', 'low_price'])
-    vc = find_col(df, ['volume', 'volume_match', 'klgd'])
+    hc = find_col(df,['high', 'highprice', 'high_price'])
+    lc = find_col(df,['low', 'lowprice', 'low_price'])
+    vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume'])
     
     if cc is None:
         nums = df.select_dtypes(include='number').columns
@@ -73,7 +73,42 @@ def compute_indicators(df, price_override=None):
     if lc and lows.max() < 1000:
         lows *= 1000
         
-    volumes = df[vc].astype(float).values if vc else np.zeros(len(closes))
+    # Robust volume detection
+    volumes = np.zeros(len(closes))
+    vol_col_found = None
+    
+    # Priority: known names first
+    if vc:
+        v = df[vc].astype(float).values
+        if v.max() > 1000:
+            volumes = v
+            vol_col_found = vc
+            
+    # Fallback: any large numeric column (not price)
+    if vol_col_found is None:
+        for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
+            fc = find_col(df, [try_col])
+            if fc:
+                v = df[fc].astype(float).values
+                if v.max() > 1000:
+                    volumes = v
+                    vol_col_found = fc
+                    break
+                    
+    if vol_col_found is None:
+        for col in df.select_dtypes(include='number').columns:
+            if col == cc or col == hc or col == lc:
+                continue
+            v = df[col].astype(float).values
+            if v.max() > 100000:
+                volumes = v
+                vol_col_found = col
+                logger.info(f"Volume fallback col: {col} max={v.max():.0f}")
+                break
+                
+    if vol_col_found is None:
+        logger.warning(f"No volume column found in: {list(df.columns)}")
+        
     price = float(price_override) if price_override else float(closes[-1])
     prev_close = float(closes[-2]) if len(closes) > 1 else price
 
@@ -185,6 +220,9 @@ def compute_indicators(df, price_override=None):
 
     def find_sr(h, l, window=5):
         levels =[]
+        # Use last 120 candles for S/R detection
+        h = h[-120:] if len(h) > 120 else h
+        l = l[-120:] if len(l) > 120 else l
         for i in range(window, len(h) - window):
             if h[i] == max(h[i - window:i + window + 1]):
                 levels.append(('R', float(h[i])))
@@ -201,13 +239,19 @@ def compute_indicators(df, price_override=None):
                     break
             if not found:
                 merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
-        strong = [m for m in merged if m['count'] >= 2]
+        strong =[m for m in merged if m['count'] >= 2]
         strong.sort(key=lambda x: x['count'], reverse=True)
         sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
         return sups, ress
 
-    supports, resistances = find_sr(highs, lows)
+    supports, resistances = find_sr(highs, lows, window=5)
+    # If no support found, try smaller window
+    if not supports:
+        supports, resistances_tmp = find_sr(highs, lows, window=3)
+    if not resistances:
+        supports_tmp, resistances = find_sr(highs, lows, window=3)
+        
     score = 50
     signals =[]
 
@@ -245,11 +289,21 @@ def compute_indicators(df, price_override=None):
         signals.append(('RSI', 'neutral', 'RSI=' + str(rsi_val) + ' Vung trung tinh'))
 
     if div_type == 'bullish':
-        score += 10
-        signals.append(('DIV', 'bull', div_msg))
+        # RSI qua ban + phan ky tang = tin hieu MUA rat manh
+        if rsi_val < 35:
+            score += 15
+            signals.append(('DIV', 'bull', div_msg + ' [RSI qua ban xac nhan!]'))
+        else:
+            score += 10
+            signals.append(('DIV', 'bull', div_msg))
     elif div_type == 'bearish':
-        score -= 10
-        signals.append(('DIV', 'bear', div_msg))
+        # RSI qua mua + phan ky giam = tin hieu BAN rat manh
+        if rsi_val > 65:
+            score -= 15
+            signals.append(('DIV', 'bear', div_msg + '[RSI qua mua xac nhan!]'))
+        else:
+            score -= 10
+            signals.append(('DIV', 'bear', div_msg))
     else:
         signals.append(('DIV', 'neutral', 'Khong phat hien phan ky RSI'))
 
@@ -324,7 +378,7 @@ def compute_indicators(df, price_override=None):
         signals.append(('BB', 'bear', 'Gia cham BB tren ' + f'{bb_upper:,.0f}' + ' -&gt; Khan'))
     else:
         signals.append(('BB', 'neutral', 'Gia trong BB (' + f'{bb_pct:.0f}' + '% trong dai)'))
-        
+
     three_in_one = (price > ma20 and vol_ratio >= 1.5 and price_up and 30 < rsi_val < 70)
     score = max(0, min(100, score))
     
@@ -539,7 +593,14 @@ def api_debug(symbol):
     try:
         df, source = load_history(symbol.upper(), days=10)
         if df is not None:
-            return jsonify({'columns': list(df.columns), 'source': source, 'rows': len(df)})
+            sample = df.tail(3).to_dict(orient='records')
+            return jsonify({
+                'columns': list(df.columns),
+                'source': source,
+                'rows': len(df),
+                'sample': sample,
+                'dtypes': {c: str(df[c].dtype) for c in df.columns}
+            })
         return jsonify({'error': 'No data'})
     except Exception as e:
         return jsonify({'error': str(e)})
