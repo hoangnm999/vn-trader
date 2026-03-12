@@ -1,5 +1,3 @@
-Content is user-generated and unverified.
-4
 import os
 import time
 import logging
