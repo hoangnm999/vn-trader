@@ -52,7 +52,7 @@ def fetch_price(symbol: str) -> dict:
                 'symbol': symbol,
                 'price': price,
                 'change_pct': 0,
-                'source': 'TCBS_intraday'
+                'source': 'VCI_intraday'
             }
             set_cache(f"price_{symbol}", result)
             return result
@@ -84,7 +84,7 @@ def fetch_price(symbol: str) -> dict:
                 'symbol': symbol,
                 'price': close,
                 'change_pct': round(change_pct, 2),
-                'source': 'TCBS_history'
+                'source': 'VCI_history'
             }
             set_cache(f"price_{symbol}", result)
             return result
