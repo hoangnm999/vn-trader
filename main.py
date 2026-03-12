@@ -11,7 +11,7 @@ def warmup_cache():
 time.sleep(10)
 try:
 import requests
-r = requests.get(‘http://localhost:8080/api/warmup’, timeout=5)
+r = requests.get("http://localhost:8080/api/warmup", timeout=5)
 logger.info(f”Cache warmup: {r.json()}”)
 except Exception as e:
 logger.warning(f”Warmup failed: {e}”)
