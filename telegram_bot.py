@@ -18,8 +18,7 @@ def send(text, chat_id=None):
         return False
         
     MAX = 3800
-    chunks =[]
-    
+    chunks = []
     if len(text) <= MAX:
         chunks = [text]
     else:
@@ -90,6 +89,33 @@ def get_group(signals, key):
                 lines.append(' ' + sig_emoji(t) + ' ' + txt)
     return '\n'.join(lines) if lines else ''
 
+def build_action_lines(data):
+    action = data.get('action', '')
+    price = data.get('price', 0)
+    sl = data.get('stop_loss', 0)
+    tp = data.get('take_profit', 0)
+    sl_lbl = data.get('sl_label', '')
+    tp_lbl = data.get('tp_label', '')
+    
+    if action == 'MUA':
+        return (
+            ' Vao lenh : ' + f'{price:,.0f}' + 'd\n'
+            + ' Stop Loss : ' + f'{sl:,.0f}' + 'd (' + sl_lbl + ')\n'
+            + ' Chot loi : ' + f'{tp:,.0f}' + 'd (' + tp_lbl + ')\n'
+            + ' R:R = 1:2\n\n'
+        )
+    elif action == 'BAN':
+        return (
+            ' Nen ban o : ' + f'{price:,.0f}' + 'd (gia hien tai)\n'
+            + ' Vung mua lai: ' + f'{tp:,.0f}' + 'd (vung ho tro gan nhat)\n'
+            + ' Neu da mua : Cat lo neu gia tiep tuc giam them -7%\n\n'
+        )
+    else:
+        return (
+            ' Theo doi vung: ' + f'{sl:,.0f}' + 'd - ' + f'{tp:,.0f}' + 'd\n'
+            + ' Chua du tin hieu de vao lenh\n\n'
+        )
+
 def build_analysis_msg(data, prefix='Phan tich'):
     sym = data.get('symbol', '')
     price = data.get('price', 0)
@@ -98,7 +124,7 @@ def build_analysis_msg(data, prefix='Phan tich'):
     ae = action_emoji(action)
     sigs = data.get('signals',[])
     ichi = data.get('ichimoku', {})
-    sups = data.get('supports',[])
+    sups = data.get('supports', [])
     ress = data.get('resistances',[])
     div = data.get('rsi_divergence', {})
     vr = data.get('vol_ratio', 1.0)
@@ -157,7 +183,8 @@ def build_analysis_msg(data, prefix='Phan tich'):
         + '<b>6. Volume (Dong tien)</b>\n'
         + ' Hom nay:' + fmt_vol(data.get('vol_today', 0)) + ' TB20:' + fmt_vol(data.get('vol_tb20', 0)) + '\n' + (vol_lines or '') + '\n\n'
         + '<b>7. Ichimoku</b>\n'
-        + ' Tenkan:' + f'{ichi.get("tenkan", 0):,.0f}' + ' Kijun:' + f'{ichi.get("kijun", 0):,.0f}' + ' May:' + f'{cb:,.0f}' + '-' + f'{ct:,.0f}' + ' ' + ichi_s + '\n'
+        + ' Tenkan:' + f'{ichi.get("tenkan", 0):,.0f}' + ' Kijun:' + f'{ichi.get("kijun", 0):,.0f}' + '\n'
+        + ' May:' + f'{cb:,.0f}' + '-' + f'{ct:,.0f}' + ' ' + ichi_s + '\n'
         + (ichi_lines or '') + '\n\n'
         + '<b>8. Ho tro & Khang cu</b>\n'
         + ' HT: ' + sup_txt + '\n'
@@ -165,10 +192,7 @@ def build_analysis_msg(data, prefix='Phan tich'):
         + (sr_lines or '') + '\n\n'
         + '<b>KET LUAN</b>\n'
         + ' ' + ae + ' <b>' + action + '</b> (' + str(score) + '/100)\n'
-        + ' Vao lenh: ' + f'{data.get("entry", 0):,.0f}' + 'd\n'
-        + ' Stop Loss: ' + f'{data.get("stop_loss", 0):,.0f}' + 'd (-7%)\n'
-        + ' Take Profit: ' + f'{data.get("take_profit", 0):,.0f}' + 'd (+14%)\n'
-        + ' R:R = 1:2\n\n'
+        + build_action_lines(data)
         + '<i>Chi mang tinh tham khao, khong phai tu van dau tu</i>'
     )
     return msg
@@ -234,6 +258,7 @@ def handle_signals(chat_id):
     if not data:
         send('Khong lay duoc tin hieu. Thu lai sau hoac dung:\n/analyze HPG\n/analyze FPT\n/analyze VCB', chat_id)
         return
+        
     msg = '<b>Top Tin Hieu Hom Nay</b>\n\n'
     for item in data:
         action = item.get('action', '')
@@ -299,7 +324,7 @@ def poll_updates():
                 params={'offset': offset, 'timeout': 30},
                 timeout=35
             )
-            for upd in resp.json().get('result',[]):
+            for upd in resp.json().get('result', []):
                 offset = upd['update_id'] + 1
                 msg = upd.get('message', {})
                 if not msg:
@@ -367,7 +392,7 @@ def format_alert(item):
     vr = item.get('vol_ratio', 1.0)
     div = item.get('rsi_divergence', {})
     tio = item.get('three_in_one', False)
-    sups = item.get('supports',[])
+    sups = item.get('supports', [])
     ress = item.get('resistances',[])
     
     if score >= SCORE_STRONG_BUY:
