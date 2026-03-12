@@ -6,6 +6,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -47,18 +48,21 @@ def load_history(symbol, days=200):
 
 def compute_indicators(df, price_override=None):
     import numpy as np
-    cc = find_col(df, ['close', 'closeprice', 'close_price'])
-    hc = find_col(df, ['high', 'highprice', 'high_price'])
-    lc = find_col(df, ['low', 'lowprice', 'low_price'])
-    vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume'])
+    
+    cc = find_col(df,['close', 'closeprice', 'close_price'])
+    hc = find_col(df,['high', 'highprice', 'high_price'])
+    lc = find_col(df,['low', 'lowprice', 'low_price'])
+    vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volu'])
     
     if cc is None:
         nums = df.select_dtypes(include='number').columns
         cc = nums[-1] if len(nums) > 0 else None
-        if cc is None:
-            return None
-            
+        
+    if cc is None:
+        return None
+        
     import pandas as pd
+    
     def to_float_arr(series):
         # Handle string numbers like "77.7" or "12722400"
         return pd.to_numeric(series, errors='coerce').fillna(0).astype(float).values
@@ -75,20 +79,28 @@ def compute_indicators(df, price_override=None):
     if lc and lows.max() < 1000:
         lows *= 1000
         
+    # Log raw df info for debugging
+    logger.info(f"DF columns: {list(df.columns)}")
+    for col in df.columns:
+        try:
+            sample_val = df[col].iloc[-1]
+            logger.info(f" col={col} last={sample_val} type={type(sample_val).__name__}")
+        except:
+            pass
+            
     # Robust volume detection - handle string values from VCI
     volumes = np.zeros(len(closes))
     vol_col_found = None
-    for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume',
-                    'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
+    for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
         fc = find_col(df, [try_col])
         if fc:
             v = pd.to_numeric(df[fc], errors='coerce').fillna(0).astype(float).values
             if v.max() > 1000:
                 volumes = v
-            vol_col_found = fc
-            logger.info(f"Volume col: {fc} max={v.max():.0f}")
-            break
-            
+                vol_col_found = fc
+                logger.info(f"Volume col: {fc} max={v.max():.0f}")
+                break
+                
     # Fallback: any column with large values
     if vol_col_found is None:
         for col in df.columns:
@@ -103,6 +115,8 @@ def compute_indicators(df, price_override=None):
                 
     if vol_col_found is None:
         logger.warning(f"No volume col found in: {list(df.columns)}")
+    else:
+        logger.info(f"Volume OK: col={vol_col_found} today={volumes[-1]:.0f} ma20={np.mean(volumes[-20:]):.0f}")
         
     price = float(price_override) if price_override else float(closes[-1])
     prev_close = float(closes[-2]) if len(closes) > 1 else price
@@ -141,43 +155,39 @@ def compute_indicators(df, price_override=None):
             b1, b2 = bottoms[-2], bottoms[-1]
             if p[b2] < p[b1] and r[b2] > r[b1] + 2:
                 return 'bullish', ('Phan ky tang: Gia day moi (' + f'{p[b2]:,.0f}' + ') thap')
+                
         if len(tops) >= 2:
             t1, t2 = tops[-2], tops[-1]
             if p[t2] > p[t1] and r[t2] < r[t1] - 2:
                 return 'bearish', ('Phan ky giam: Gia dinh moi (' + f'{p[t2]:,.0f}' + ') cao')
+                
         return 'none', ''
         
     div_type, div_msg = detect_divergence(closes, rsi_series)
-    
     ema12 = ema_arr(closes, 12)
     ema26 = ema_arr(closes, 26)
     macd_line = ema12 - ema26
     sig_line = ema_arr(macd_line, 9)
     macd_hist = macd_line - sig_line
-    
     macd_val = float(macd_line[-1])
     macd_sig = float(sig_line[-1])
     macd_h = float(macd_hist[-1])
-    
     ma20 = float(np.mean(closes[-20:]))
     ma50 = float(np.mean(closes[-min(50, len(closes)):]))
     ma20_prev = float(np.mean(closes[-21:-1])) if len(closes) >= 21 else ma20
     ma50_prev = float(np.mean(closes[-51:-1])) if len(closes) >= 51 else ma50
-    
     golden_cross = ma20_prev < ma50_prev and ma20 > ma50
     death_cross = ma20_prev > ma50_prev and ma20 < ma50
-    
     bb_mid = float(np.mean(closes[-20:]))
     bb_std = float(np.std(closes[-20:]))
     bb_upper = bb_mid + 2 * bb_std
     bb_lower = bb_mid - 2 * bb_std
     bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper != bb_lower else 50
-    
     vol_today = float(volumes[-1]) if len(volumes) > 0 else 0
     vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else vol_today
     vol_ratio = vol_today / vol_ma20 if vol_ma20 > 0 else 1.0
-    
     price_up = price >= prev_close
+    
     if vol_ratio >= 1.5 and price_up:
         vol_signal = 'shark_buy'
         vol_msg = 'Vol ' + f'{vol_ratio:.1f}' + 'x TB + gia tang -> Dong tien lon vao! Xac nh'
@@ -222,7 +232,8 @@ def compute_indicators(df, price_override=None):
                 levels.append(('R', float(h[i])))
             if l[i] == min(l[i - window:i + window + 1]):
                 levels.append(('S', float(l[i])))
-        merged = []
+                
+        merged =[]
         levels.sort(key=lambda x: x[1])
         for typ, lvl in levels:
             found = False
@@ -233,9 +244,10 @@ def compute_indicators(df, price_override=None):
                     break
             if not found:
                 merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
-        strong =[m for m in merged if m['count'] >= 2]
+                
+        strong = [m for m in merged if m['count'] >= 2]
         strong.sort(key=lambda x: x['count'], reverse=True)
-        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)
+        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
         return sups, ress
         
@@ -286,7 +298,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua ban + phan ky tang = tin hieu MUA rat manh
         if rsi_val < 35:
             score += 15
-            signals.append(('DIV', 'bull', div_msg + ' [RSI qua ban xac nhan!]'))
+            signals.append(('DIV', 'bull', div_msg + '[RSI qua ban xac nhan!]'))
         else:
             score += 10
             signals.append(('DIV', 'bull', div_msg))
@@ -294,7 +306,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua mua + phan ky giam = tin hieu BAN rat manh
         if rsi_val > 65:
             score -= 15
-            signals.append(('DIV', 'bear', div_msg + '[RSI qua mua xac nhan!]'))
+            signals.append(('DIV', 'bear', div_msg + ' [RSI qua mua xac nhan!]'))
         else:
             score -= 10
             signals.append(('DIV', 'bear', div_msg))
@@ -445,6 +457,7 @@ def fetch_price(symbol):
     cached = get_cached('price_' + symbol)
     if cached:
         return cached
+        
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
@@ -456,17 +469,20 @@ def fetch_price(symbol):
             )
             if df is None or df.empty:
                 continue
+                
             cc = find_col(df, ['close', 'closeprice', 'close_price'])
             if cc is None:
                 nums = df.select_dtypes(include='number').columns
                 cc = nums[-1] if len(nums) > 0 else None
             if cc is None:
                 continue
+                
             close = float(df.iloc[-1][cc])
             if 0 < close < 1000:
                 close *= 1000
             if close <= 0:
                 continue
+                
             chg = 0
             if len(df) >= 2:
                 prev = float(df.iloc[-2][cc])
@@ -474,6 +490,7 @@ def fetch_price(symbol):
                     prev *= 1000
                 if prev > 0:
                     chg = round((close - prev) / prev * 100, 2)
+                    
             result = {'symbol': symbol, 'price': round(close, 0), 'change_pct': chg, 'source': source}
             set_cache('price_' + symbol, result)
             return result
@@ -487,16 +504,20 @@ def fetch_analysis(symbol, price_override=None):
     cached = get_cached(cache_key)
     if cached:
         return cached
+        
     df, source = load_history(symbol, days=200)
     if df is None:
         return {'symbol': symbol, 'error': 'Khong tai duoc du lieu'}
+        
     try:
         result = compute_indicators(df, price_override)
     except Exception as e:
         logger.error(f"compute {symbol}: {e}")
         return {'symbol': symbol, 'error': str(e)}
+        
     if result is None:
         return {'symbol': symbol, 'error': 'Khong tinh duoc chi bao'}
+        
     result['symbol'] = symbol
     result['source'] = source
     set_cache(cache_key, result)
@@ -544,6 +565,7 @@ def start_background_cache():
         return
     _bg_running = True
     import threading
+    
     def worker():
         time.sleep(15)
         while True:
@@ -554,6 +576,7 @@ def start_background_cache():
                 except Exception as e:
                     logger.warning('cache ' + sym + ': ' + str(e))
             time.sleep(300)
+            
     threading.Thread(target=worker, daemon=True).start()
     logger.info('Background cache started for ' + str(len(WATCHLIST)) + ' symbols')
 
@@ -565,8 +588,9 @@ def api_signals():
         cached = get_cached('analysis_' + sym + '_live')
         if cached and 'score' in cached and 'error' not in cached:
             results.append(cached)
+            
     if len(results) < 3:
-        for sym in['VCB', 'HPG', 'FPT']:
+        for sym in ['VCB', 'HPG', 'FPT']:
             if any(r.get('symbol') == sym for r in results):
                 continue
             try:
@@ -575,6 +599,7 @@ def api_signals():
                     results.append(r)
             except Exception:
                 pass
+                
     results.sort(key=lambda x: abs(x.get('score', 50) - 50), reverse=True)
     return jsonify(results[:3])
 
@@ -590,7 +615,8 @@ def api_debug(symbol):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    for source in['VCI', 'TCBS']:
+    
+    for source in ['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=sym, source=source).quote.history(
@@ -609,6 +635,7 @@ def api_debug(symbol):
                 result['attempts'].append({'source': source, 'status': 'empty'})
         except Exception as e:
             result['attempts'].append({'source': source, 'status': 'error', 'msg': str(e)[:20]})
+            
     return jsonify(result)
 
 # Auto-start background cache when Flask loads
