@@ -532,6 +532,7 @@ def api_debug(symbol):
         return jsonify({'error': str(e)})
 
 # Auto-start background cache when Flask loads
+import threading
 threading.Thread(target=lambda: (time.sleep(20), start_background_cache()), daemon=True).start()
 
 if __name__ == '__main__':
