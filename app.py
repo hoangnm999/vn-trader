@@ -6,7 +6,6 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in['VCI', 'TCBS']:
+    for source in ['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -48,19 +47,17 @@ def load_history(symbol, days=200):
 
 def compute_indicators(df, price_override=None):
     import numpy as np
-    
-    cc = find_col(df, ['close', 'closeprice', 'close_price'])
+    cc = find_col(df,['close', 'closeprice', 'close_price'])
     hc = find_col(df,['high', 'highprice', 'high_price'])
-    lc = find_col(df,['low', 'lowprice', 'low_price'])
+    lc = find_col(df, ['low', 'lowprice', 'low_price'])
     vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume'])
     
     if cc is None:
         nums = df.select_dtypes(include='number').columns
         cc = nums[-1] if len(nums) > 0 else None
-        
-    if cc is None:
-        return None
-        
+        if cc is None:
+            return None
+            
     closes = df[cc].astype(float).values
     if closes.max() < 1000:
         closes *= 1000
@@ -78,23 +75,17 @@ def compute_indicators(df, price_override=None):
     vol_col_found = None
     
     # Priority: known names first
-    if vc:
-        v = df[vc].astype(float).values
-        if v.max() > 1000:
-            volumes = v
-            vol_col_found = vc
+    for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume',
+                    'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
+        fc = find_col(df, [try_col])
+        if fc:
+            v = df[fc].astype(float).values
+            if v.max() > 1000:
+                volumes = v
+            vol_col_found = fc
+            break
             
     # Fallback: any large numeric column (not price)
-    if vol_col_found is None:
-        for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
-            fc = find_col(df, [try_col])
-            if fc:
-                v = df[fc].astype(float).values
-                if v.max() > 1000:
-                    volumes = v
-                    vol_col_found = fc
-                    break
-                    
     if vol_col_found is None:
         for col in df.select_dtypes(include='number').columns:
             if col == cc or col == hc or col == lc:
@@ -108,7 +99,7 @@ def compute_indicators(df, price_override=None):
                 
     if vol_col_found is None:
         logger.warning(f"No volume column found in: {list(df.columns)}")
-        
+
     price = float(price_override) if price_override else float(closes[-1])
     prev_close = float(closes[-2]) if len(closes) > 1 else price
 
@@ -155,33 +146,35 @@ def compute_indicators(df, price_override=None):
         return 'none', ''
 
     div_type, div_msg = detect_divergence(closes, rsi_series)
-    
+
     ema12 = ema_arr(closes, 12)
     ema26 = ema_arr(closes, 26)
     macd_line = ema12 - ema26
     sig_line = ema_arr(macd_line, 9)
     macd_hist = macd_line - sig_line
+
     macd_val = float(macd_line[-1])
     macd_sig = float(sig_line[-1])
     macd_h = float(macd_hist[-1])
-    
+
     ma20 = float(np.mean(closes[-20:]))
     ma50 = float(np.mean(closes[-min(50, len(closes)):]))
     ma20_prev = float(np.mean(closes[-21:-1])) if len(closes) >= 21 else ma20
     ma50_prev = float(np.mean(closes[-51:-1])) if len(closes) >= 51 else ma50
-    
+
     golden_cross = ma20_prev < ma50_prev and ma20 > ma50
     death_cross = ma20_prev > ma50_prev and ma20 < ma50
-    
+
     bb_mid = float(np.mean(closes[-20:]))
     bb_std = float(np.std(closes[-20:]))
     bb_upper = bb_mid + 2 * bb_std
     bb_lower = bb_mid - 2 * bb_std
     bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper != bb_lower else 50
-    
+
     vol_today = float(volumes[-1]) if len(volumes) > 0 else 0
     vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else vol_today
     vol_ratio = vol_today / vol_ma20 if vol_ma20 > 0 else 1.0
+
     price_up = price >= prev_close
 
     if vol_ratio >= 1.5 and price_up:
@@ -210,7 +203,7 @@ def compute_indicators(df, price_override=None):
     span_b = (np.max(highs[-52:]) + np.min(lows[-52:])) / 2 if n >= 52 else price
     cloud_top = round(max(float(span_a), float(span_b)), 0)
     cloud_bottom = round(min(float(span_a), float(span_b)), 0)
-    
+
     ichi = {
         'tenkan': round(float(tenkan), 0),
         'kijun': round(float(kijun), 0),
@@ -228,7 +221,8 @@ def compute_indicators(df, price_override=None):
                 levels.append(('R', float(h[i])))
             if l[i] == min(l[i - window:i + window + 1]):
                 levels.append(('S', float(l[i])))
-        merged =[]
+                
+        merged = []
         levels.sort(key=lambda x: x[1])
         for typ, lvl in levels:
             found = False
@@ -239,9 +233,10 @@ def compute_indicators(df, price_override=None):
                     break
             if not found:
                 merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
+                
         strong =[m for m in merged if m['count'] >= 2]
         strong.sort(key=lambda x: x['count'], reverse=True)
-        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
+        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
         return sups, ress
 
@@ -251,7 +246,7 @@ def compute_indicators(df, price_override=None):
         supports, resistances_tmp = find_sr(highs, lows, window=3)
     if not resistances:
         supports_tmp, resistances = find_sr(highs, lows, window=3)
-        
+
     score = 50
     signals =[]
 
@@ -292,7 +287,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua ban + phan ky tang = tin hieu MUA rat manh
         if rsi_val < 35:
             score += 15
-            signals.append(('DIV', 'bull', div_msg + ' [RSI qua ban xac nhan!]'))
+            signals.append(('DIV', 'bull', div_msg + '[RSI qua ban xac nhan!]'))
         else:
             score += 10
             signals.append(('DIV', 'bull', div_msg))
@@ -300,7 +295,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua mua + phan ky giam = tin hieu BAN rat manh
         if rsi_val > 65:
             score -= 15
-            signals.append(('DIV', 'bear', div_msg + '[RSI qua mua xac nhan!]'))
+            signals.append(('DIV', 'bear', div_msg + ' [RSI qua mua xac nhan!]'))
         else:
             score -= 10
             signals.append(('DIV', 'bear', div_msg))
@@ -357,7 +352,7 @@ def compute_indicators(df, price_override=None):
             signals.append(('SR', 'bear', 'Gia gan KC manh ' + f'{resistances[0]["price"]:,.0f}'))
         elif dist_r < 4:
             score -= 5
-            signals.append(('SR', 'bear', 'KC gan: ' + f'{resistances[0]["price"]:,.0f}'))
+            signals.append(('SR', 'bear', 'KC gan: ' + f'{resistances[0]["price"]:,.0f}' + ' '))
         else:
             signals.append(('SR', 'neutral', 'KC gan nhat: ' + f'{resistances[0]["price"]:,.0f}'))
 
@@ -381,14 +376,14 @@ def compute_indicators(df, price_override=None):
 
     three_in_one = (price > ma20 and vol_ratio >= 1.5 and price_up and 30 < rsi_val < 70)
     score = max(0, min(100, score))
-    
+
     if score >= 65:
         action = 'MUA'
     elif score <= 35:
         action = 'BAN'
     else:
         action = 'THEO DOI'
-        
+
     # SL/TP/Rebuy theo huong lenh
     # Thi truong VN khong co short selling
     # Tin hieu BAN = nen ban co phieu dang nam + cho mua lai o vung ho tro
@@ -414,7 +409,7 @@ def compute_indicators(df, price_override=None):
         rebuy_zone = None
         sl_label = '-7% neu da mua'
         tp_label = '+7% tham khao'
-        
+
     return {
         'price': round(price, 0),
         'rsi': rsi_val,
@@ -571,7 +566,7 @@ def api_signals():
         if cached and 'score' in cached and 'error' not in cached:
             results.append(cached)
     if len(results) < 3:
-        for sym in ['VCB', 'HPG', 'FPT']:
+        for sym in['VCB', 'HPG', 'FPT']:
             if any(r.get('symbol') == sym for r in results):
                 continue
             try:
@@ -590,20 +585,31 @@ def api_warmup():
 
 @app.route('/api/debug/<symbol>')
 def api_debug(symbol):
-    try:
-        df, source = load_history(symbol.upper(), days=10)
-        if df is not None:
-            sample = df.tail(3).to_dict(orient='records')
-            return jsonify({
-                'columns': list(df.columns),
-                'source': source,
-                'rows': len(df),
-                'sample': sample,
-                'dtypes': {c: str(df[c].dtype) for c in df.columns}
-            })
-        return jsonify({'error': 'No data'})
-    except Exception as e:
-        return jsonify({'error': str(e)})
+    sym = symbol.upper()
+    result = {'symbol': sym, 'attempts':[]}
+    from datetime import datetime, timedelta
+    end = datetime.now().strftime('%Y-%m-%d')
+    start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    for source in ['VCI', 'TCBS']:
+        try:
+            from vnstock import Vnstock
+            df = Vnstock().stock(symbol=sym, source=source).quote.history(
+                start=start, end=end, interval='1D'
+            )
+            if df is not None and not df.empty:
+                row = df.tail(1).to_dict(orient='records')[0]
+                result['attempts'].append({
+                    'source': source,
+                    'status': 'OK',
+                    'rows': len(df),
+                    'columns': list(df.columns),
+                    'last_row': {k: str(v) for k, v in row.items()}
+                })
+            else:
+                result['attempts'].append({'source': source, 'status': 'empty'})
+        except Exception as e:
+            result['attempts'].append({'source': source, 'status': 'error', 'msg': str(e)[:20]})
+    return jsonify(result)
 
 # Auto-start background cache when Flask loads
 import threading
