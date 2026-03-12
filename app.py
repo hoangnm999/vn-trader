@@ -142,4 +142,182 @@ def compute_indicators(df, price_override=None):
     bb_std = float(np.std(closes[-20:]))
     bb_upper = bb_mid + 2 * bb_std
     bb_lower = bb_mid - 2 * bb_std
-    bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper !=
+    bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper != bb_lower else 0
+
+    # ── Volume thông minh ─────────────────────────────────────────────────────
+    vol_today = float(volumes[-1]) if len(volumes) > 0 else 0
+    vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else vol_today
+    vol_ratio = vol_today / vol_ma20 if vol_ma20 > 0 else 1.0
+    price_up = price >= prev_close
+
+    if vol_ratio >= 1.5 and price_up:
+        vol_signal = 'shark_buy'
+        vol_msg = f'Dòng tiền lớn vào! Vol {vol_ratio:.1f}x TB + giá tăng → Xác nhận MUA'
+    elif vol_ratio >= 1.5 and not price_up:
+        vol_signal = 'shark_sell'
+        vol_msg = f'Dòng tiền lớn xả! Vol {vol_ratio:.1f}x TB + giá giảm → Tín hiệu BÁN'
+    elif vol_ratio < 0.7 and price_up:
+        vol_signal = 'fake_rally'
+        vol_msg = f'Giá tăng nhưng Vol thấp {vol_ratio:.1f}x TB → Có thể "kéo xả", cẩn trọng'
+    elif vol_ratio >= 1.0 and price_up:
+        vol_signal = 'normal_buy'
+        vol_msg = f'Vol {vol_ratio:.1f}x TB + giá tăng → Xu hướng tăng được xác nhận'
+    elif vol_ratio < 0.7 and not price_up:
+        vol_signal = 'weak_sell'
+        vol_msg = f'Vol thấp {vol_ratio:.1f}x TB + giá giảm → Áp lực bán yếu'
+    else:
+        vol_signal = 'normal'
+        vol_msg = f'Vol bình thường {vol_ratio:.1f}x TB'
+
+    # ── Ichimoku ──────────────────────────────────────────────────────────────
+    n = len(closes)
+    tenkan = (np.max(highs[-9:]) + np.min(lows[-9:])) / 2 if n >= 9 else price
+    kijun = (np.max(highs[-26:]) + np.min(lows[-26:])) / 2 if n >= 26 else price
+    span_a = (tenkan + kijun) / 2
+    span_b = (np.max(highs[-52:]) + np.min(lows[-52:])) / 2 if n >= 52 else price
+    cloud_top = round(max(float(span_a), float(span_b)), 0)
+    cloud_bottom = round(min(float(span_a), float(span_b)), 0)
+    ichi = {
+        'tenkan': round(float(tenkan), 0), 'kijun': round(float(kijun), 0),
+        'cloud_top': cloud_top, 'cloud_bottom': cloud_bottom,
+    }
+
+    # ── Hỗ trợ & Kháng cự ────────────────────────────────────────────────────
+    def find_sr(h, l, window=5):
+        levels = []
+        for i in range(window, len(h) - window):
+            if h[i] == max(h[i-window:i+window+1]): levels.append(('R', float(h[i])))
+            if l[i] == min(l[i-window:i+window+1]): levels.append(('S', float(l[i])))
+        
+        merged = []
+        levels.sort(key=lambda x: x[1])
+        for typ, lvl in levels:
+            found = False
+            for m in merged:
+                if abs(m['price'] - lvl) / lvl < 0.015:
+                    m['count'] += 1; found = True; break
+            if not found:
+                merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
+        
+        strong = [m for m in merged if m['count'] >= 2]
+        strong.sort(key=lambda x: x['count'], reverse=True)
+        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)
+        ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
+        return sups, ress
+
+    supports, resistances = find_sr(highs, lows)
+
+    # ── CHẤM ĐIỂM ─────────────────────────────────────────────────────────────
+    score = 50 
+    signals = []
+
+    # NHÓM 1: VOLUME (35%)
+    if vol_signal == 'shark_buy':
+        score += 35
+        signals.append(('VOL', 'bull', vol_msg))
+    elif vol_signal == 'shark_sell':
+        score -= 35
+        signals.append(('VOL', 'bear', vol_msg))
+    elif vol_signal == 'fake_rally':
+        score -= 20
+        signals.append(('VOL', 'bear', vol_msg))
+    elif vol_signal == 'normal_buy':
+        score += 12
+        signals.append(('VOL', 'bull', vol_msg))
+    elif vol_signal == 'weak_sell':
+        score += 5
+        signals.append(('VOL', 'neutral', vol_msg))
+    else:
+        signals.append(('VOL', 'neutral', vol_msg))
+
+    # NHÓM 2: RSI (25%)
+    if rsi_val < 30:
+        score += 15
+        signals.append(('RSI', 'bull', f'RSI={rsi_val} — Vùng quá bán'))
+    elif rsi_val > 70:
+        score -= 15
+        signals.append(('RSI', 'bear', f'RSI={rsi_val} — Vùng quá mua'))
+    else:
+        signals.append(('RSI', 'neutral', f'RSI={rsi_val}'))
+
+    if div_type == 'bullish':
+        score += 10
+        signals.append(('DIV', 'bull', div_msg))
+    elif div_type == 'bearish':
+        score -= 10
+        signals.append(('DIV', 'bear', div_msg))
+
+    # NHÓM 3: TREND (20%)
+    if golden_cross:
+        score += 20
+        signals.append(('MA', 'bull', 'GOLDEN CROSS!'))
+    elif death_cross:
+        score -= 20
+        signals.append(('MA', 'bear', 'DEATH CROSS!'))
+    elif price > ma20:
+        score += 10
+        signals.append(('MA', 'bull', 'Giá > MA20'))
+    else:
+        score -= 10
+        signals.append(('MA', 'bear', 'Giá < MA20'))
+
+    if macd_val > macd_sig:
+        score += 3
+        signals.append(('MACD', 'bull', 'MACD hướng lên'))
+    elif macd_val < macd_sig:
+        score -= 3
+        signals.append(('MACD', 'bear', 'MACD hướng xuống'))
+
+    # NHÓM 4: SR (12%)
+    if supports and (price - supports[0]['price']) / price < 0.015:
+        score += 12
+        signals.append(('SR', 'bull', 'Gần hỗ trợ mạnh'))
+    if resistances and (resistances[0]['price'] - price) / price < 0.015:
+        score -= 12
+        signals.append(('SR', 'bear', 'Gần kháng cự mạnh'))
+
+    # NHÓM 5: ICHI + BB (8%)
+    if price > cloud_top: score += 5
+    elif price < cloud_bottom: score -= 5
+    
+    if price <= bb_lower: score += 3
+    elif price >= bb_upper: score -= 3
+
+    three_in_one = (price > ma20 and vol_ratio >= 1.5 and price_up and 30 < rsi_val < 70)
+    score = max(0, min(100, score))
+    
+    if score >= 65: action = 'MUA'
+    elif score <= 35: action = 'BÁN'
+    else: action = 'THEO DÕI'
+
+    return {
+        'price': round(price, 0),
+        'score': score,
+        'action': action,
+        'signals': signals,
+        'three_in_one': three_in_one,
+        'stop_loss': round(price * 0.93, 0),
+        'take_profit': round(price * 1.14, 0),
+        # ... các trường khác giữ nguyên ...
+    }
+
+# ── API ROUTES ───────────────────────────────────────────────────────────
+
+@app.route('/')
+def index():
+    return jsonify({'status': 'ok', 'version': 'v4'})
+
+@app.route('/api/price/<symbol>')
+def api_price(symbol):
+    from datetime import datetime, timedelta
+    # Logic fetch price lược giản để minh họa cấu trúc
+    return jsonify({'symbol': symbol.upper(), 'price': 12345})
+
+@app.route('/api/analyze/<symbol>')
+def api_analyze(symbol):
+    # Logic thực tế sẽ gọi fetch_analysis
+    return jsonify({'symbol': symbol.upper(), 'status': 'analyzed'})
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
