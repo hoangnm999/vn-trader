@@ -33,7 +33,7 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in ['vci', 'VCI']:
+    for source in ['TCBS', 'VCI']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -48,10 +48,10 @@ def load_history(symbol, days=200):
 
 def compute_indicators(df, price_override=None):
     import numpy as np
-    cc = find_col(df, ['close', 'closeprice', 'close_price'])
-    hc = find_col(df, ['high', 'highprice', 'high_price'])
-    lc = find_col(df, ['low', 'lowprice', 'low_price'])
-    vc = find_col(df, ['volume', 'volume_match', 'klgd'])
+    cc = find_col(df, ['close','closeprice','close_price'])
+    hc = find_col(df, ['high','highprice','high_price'])
+    lc = find_col(df, ['low','lowprice','low_price'])
+    vc = find_col(df, ['volume','volume_match','klgd'])
     
     if cc is None:
         nums = df.select_dtypes(include='number').columns
@@ -59,7 +59,7 @@ def compute_indicators(df, price_override=None):
     
     if cc is None:
         return None
-    
+        
     closes = df[cc].astype(float).values
     if closes.max() < 1000: closes *= 1000
     
@@ -72,7 +72,7 @@ def compute_indicators(df, price_override=None):
     volumes = df[vc].astype(float).values if vc else np.zeros(len(closes))
     price = float(price_override) if price_override else float(closes[-1])
     prev_close = float(closes[-2]) if len(closes) > 1 else price
-    
+
     # ── EMA helper ────────────────────────────────────────────────────────────
     def ema_arr(arr, span):
         alpha = 2 / (span + 1)
@@ -80,7 +80,7 @@ def compute_indicators(df, price_override=None):
         for i in range(1, len(arr)):
             out[i] = alpha * arr[i] + (1 - alpha) * out[i-1]
         return out
-    
+
     # =========================================================================
     # TÍNH TOÁN CHỈ SỐ
     # =========================================================================
@@ -94,10 +94,10 @@ def compute_indicators(df, price_override=None):
             ag = np.mean(g); al = np.mean(l)
             out[i] = 100. if al == 0 else 100 - 100 / (1 + ag / al)
         return np.round(out, 1)
-    
+
     rsi_series = calc_rsi_arr(closes)
     rsi_val = float(rsi_series[-1])
-    
+
     # ── RSI Phân kỳ ───────────────────────────────────────────────────────────
     def detect_divergence(price_arr, rsi_arr, lookback=20):
         if len(price_arr) < lookback:
@@ -105,28 +105,26 @@ def compute_indicators(df, price_override=None):
         p = price_arr[-lookback:]; r = rsi_arr[-lookback:]
         bottoms = [i for i in range(1, len(p)-1) if p[i] < p[i-1] and p[i] < p[i+1]]
         tops = [i for i in range(1, len(p)-1) if p[i] > p[i-1] and p[i] > p[i+1]]
-        
         if len(bottoms) >= 2:
             b1, b2 = bottoms[-2], bottoms[-1]
             if p[b2] < p[b1] and r[b2] > r[b1] + 2:
                 return 'bullish', (f'Phân kỳ tăng: Giá đáy mới ({p[b2]:,.0f}) thấp hơn '
                                  f'nhưng RSI ({r[b2]:.0f}) cao hơn → Sắp đảo chiều tăng!')
-        
         if len(tops) >= 2:
             t1, t2 = tops[-2], tops[-1]
             if p[t2] > p[t1] and r[t2] < r[t1] - 2:
                 return 'bearish', (f' Phân kỳ giảm: Giá đỉnh mới ({p[t2]:,.0f}) cao hơn '
                                   f'nhưng RSI ({r[t2]:.0f}) thấp hơn → Cảnh báo đảo chiều!')
         return 'none', ''
-    
+
     div_type, div_msg = detect_divergence(closes, rsi_series)
-    
+
     # ── MACD ──────────────────────────────────────────────────────────────────
     ema12 = ema_arr(closes, 12); ema26 = ema_arr(closes, 26)
     macd_line = ema12 - ema26; sig_line = ema_arr(macd_line, 9)
     macd_hist = macd_line - sig_line
-    macd_val = float(macd_line[-1]); macd_sig = float(sig_line[-1]); macd_h = float(macd_hist[-1])
-    
+    macd_val = float(macd_line[-1]); macd_sig = float(sig_line[-1]); macd_h = float(macd_hist[-1]) 
+
     # ── MA20 & MA50 ───────────────────────────────────────────────────────────
     ma20 = float(np.mean(closes[-20:]))
     ma50 = float(np.mean(closes[-min(50, len(closes)):]))
@@ -134,19 +132,19 @@ def compute_indicators(df, price_override=None):
     ma50_prev = float(np.mean(closes[-51:-1])) if len(closes) >= 51 else ma50
     golden_cross = ma20_prev < ma50_prev and ma20 > ma50
     death_cross = ma20_prev > ma50_prev and ma20 < ma50
-    
+
     # ── Bollinger Bands ───────────────────────────────────────────────────────
     bb_mid = float(np.mean(closes[-20:]))
     bb_std = float(np.std(closes[-20:]))
     bb_upper = bb_mid + 2 * bb_std; bb_lower = bb_mid - 2 * bb_std
     bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper != bb_lower else 0
-    
+
     # ── Volume thông minh ─────────────────────────────────────────────────────
     vol_today = float(volumes[-1]) if len(volumes) > 0 else 0
     vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else vol_today
     vol_ratio = vol_today / vol_ma20 if vol_ma20 > 0 else 1.0
     price_up = price >= prev_close
-    
+
     if vol_ratio >= 1.5 and price_up:
         vol_signal = 'shark_buy'
         vol_msg = f' Dòng tiền lớn vào! Vol {vol_ratio:.1f}x TB + giá tăng → Xác nhận MUA'
@@ -165,7 +163,7 @@ def compute_indicators(df, price_override=None):
     else:
         vol_signal = 'normal'
         vol_msg = f'Vol bình thường {vol_ratio:.1f}x TB'
-        
+
     # ── Ichimoku ──────────────────────────────────────────────────────────────
     n = len(closes)
     tenkan = (np.max(highs[-9:]) + np.min(lows[-9:])) / 2 if n >= 9 else price
@@ -178,7 +176,7 @@ def compute_indicators(df, price_override=None):
         'tenkan': round(float(tenkan), 0), 'kijun': round(float(kijun), 0),
         'cloud_top': cloud_top, 'cloud_bottom': cloud_bottom,
     }
-    
+
     # ── Hỗ trợ & Kháng cự ────────────────────────────────────────────────────
     def find_sr(h, l, window=5):
         levels = []
@@ -199,10 +197,12 @@ def compute_indicators(df, price_override=None):
         sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
         return sups, ress
-    
+
     supports, resistances = find_sr(highs, lows)
-    
-    # ── CHẤM ĐIỂM ────────────────────────────────────────────────────────────
+
+    # =========================================================================
+    # CHẤM ĐIỂM THEO TRỌNG SỐ MỚI
+    # =========================================================================
     score = 50 
     signals = []
     
@@ -223,7 +223,7 @@ def compute_indicators(df, price_override=None):
         signals.append(('VOL', 'neutral', vol_msg))
     else:
         signals.append(('VOL', 'neutral', vol_msg))
-        
+
     if rsi_val < 30:
         score += 15
         signals.append(('RSI', 'bull', f'RSI={rsi_val} — Vùng quá bán → Tìm cơ hội MUA'))
@@ -238,7 +238,7 @@ def compute_indicators(df, price_override=None):
         signals.append(('RSI', 'bear', f'RSI={rsi_val} — Vùng mạnh, thận trọng'))
     else:
         signals.append(('RSI', 'neutral', f'RSI={rsi_val} — Vùng trung tính'))
-        
+
     if div_type == 'bullish':
         score += 10
         signals.append(('DIV', 'bull', div_msg))
@@ -247,26 +247,26 @@ def compute_indicators(df, price_override=None):
         signals.append(('DIV', 'bear', div_msg))
     else:
         signals.append(('DIV', 'neutral', 'Không phát hiện phân kỳ RSI'))
-        
+
     if golden_cross:
         score += 20
-        signals.append(('MA', 'bull', f' GOLDEN CROSS! MA20 cắt lên MA50'))
+        signals.append(('MA', 'bull', f' GOLDEN CROSS! MA20 cắt lên MA50 → Tín hiệu tăng dài'))
     elif death_cross:
         score -= 20
-        signals.append(('MA', 'bear', f' DEATH CROSS! MA20 cắt xuống MA50'))
+        signals.append(('MA', 'bear', f' DEATH CROSS! MA20 cắt xuống MA50 → Tín hiệu giảm'))
     elif price > ma20 and ma20 > ma50:
         score += 15
-        signals.append(('MA', 'bull', f'Giá > MA20 > MA50 → Xu hướng tăng'))
+        signals.append(('MA', 'bull', f'Giá > MA20({ma20:,.0f}) > MA50({ma50:,.0f}) → Xu hướng'))
     elif price > ma20:
         score += 10
-        signals.append(('MA', 'bull', f'Giá {price:,.0f} trên MA20'))
+        signals.append(('MA', 'bull', f'Giá {price:,.0f} trên MA20 {ma20:,.0f} → Xu hướng ngắn'))
     elif price < ma20 and ma20 < ma50:
         score -= 15
-        signals.append(('MA', 'bear', f'Giá < MA20 < MA50 → Giảm'))
+        signals.append(('MA', 'bear', f'Giá < MA20({ma20:,.0f}) < MA50({ma50:,.0f}) → Giảm'))
     else:
         score -= 10
-        signals.append(('MA', 'bear', f'Giá {price:,.0f} dưới MA20'))
-        
+        signals.append(('MA', 'bear', f'Giá {price:,.0f} dưới MA20 {ma20:,.0f} — KHÔNG mua đuổi'))
+
     if macd_val > macd_sig and macd_h > 0:
         score += 3
         signals.append(('MACD', 'bull', f'MACD cắt lên Signal → Xác nhận động lực tăng'))
@@ -275,20 +275,20 @@ def compute_indicators(df, price_override=None):
         signals.append(('MACD', 'bear', f'MACD cắt xuống Signal → Xác nhận động lực giảm'))
     else:
         signals.append(('MACD', 'neutral', f'MACD={macd_val:+.0f} (Signal={macd_sig:+.0f})'))
-        
+
     if supports:
         dist_s = (price - supports[0]['price']) / price * 100
         strength_s = supports[0]['count']
         if dist_s < 1.5:
             pts = min(12, 6 + strength_s * 2)
             score += pts
-            signals.append(('SR', 'bull', f'Giá rất gần HT mạnh {supports[0]["price"]:,.0f}'))
+            signals.append(('SR', 'bull', f'Giá rất gần HT mạnh {supports[0]["price"]:,.0f} (chạm {strength_s} lần)'))
         elif dist_s < 4:
             score += 5
             signals.append(('SR', 'bull', f'HT gần: {supports[0]["price"]:,.0f}'))
         else:
             signals.append(('SR', 'neutral', f'HT gần nhất: {supports[0]["price"]:,.0f}'))
-            
+
     if resistances:
         dist_r = (resistances[0]['price'] - price) / price * 100
         strength_r = resistances[0]['count']
@@ -301,29 +301,36 @@ def compute_indicators(df, price_override=None):
             signals.append(('SR', 'bear', f'KC gần: {resistances[0]["price"]:,.0f}'))
         else:
             signals.append(('SR', 'neutral', f'KC gần nhất: {resistances[0]["price"]:,.0f}'))
-            
+
     if price > cloud_top:
         score += 5
-        signals.append(('ICHI', 'bull', f'Giá trên mây'))
+        signals.append(('ICHI', 'bull', f'Giá trên mây ({cloud_bottom:,.0f}–{cloud_top:,.0f})'))
     elif price < cloud_bottom:
         score -= 5
-        signals.append(('ICHI', 'bear', f'Giá dưới mây'))
+        signals.append(('ICHI', 'bear', f'Giá dưới mây ({cloud_bottom:,.0f}–{cloud_top:,.0f})'))
     else:
-        signals.append(('ICHI', 'neutral', f'Giá trong mây'))
-        
+        signals.append(('ICHI', 'neutral', f'Giá trong mây → Vùng không rõ xu hướng'))
+
     if price <= bb_lower:
         score += 3
-        signals.append(('BB', 'bull', f'Giá chạm/dưới BB dưới'))
+        signals.append(('BB', 'bull', f'Giá chạm/dưới BB dưới {bb_lower:,.0f} → Hỗ trợ BB'))
     elif price >= bb_upper:
         score -= 3
-        signals.append(('BB', 'bear', f'Giá chạm BB trên'))
+        signals.append(('BB', 'bear', f'Giá chạm BB trên {bb_upper:,.0f} → Kháng cự BB'))
     else:
-        signals.append(('BB', 'neutral', f'Giá trong BB'))
-        
-    three_in_one = (price > ma20 and vol_ratio >= 1.5 and price_up and 30 < rsi_val < 70)
+        signals.append(('BB', 'neutral', f'Giá trong BB ({bb_pct:.0f}% trong dải)'))
+
+    three_in_one = (
+        price > ma20 and 
+        vol_ratio >= 1.5 and 
+        price_up and 
+        30 < rsi_val < 70
+    )
     score = max(0, min(100, score))
-    action = 'MUA' if score >= 65 else 'BÁN' if score <= 35 else 'THEO DÕI'
-    
+    if score >= 65: action = 'MUA'
+    elif score <= 35: action = 'BÁN'
+    else: action = 'THEO DÕI'
+
     return {
         'price': round(price, 0),
         'rsi': rsi_val,
@@ -361,14 +368,14 @@ def fetch_price(symbol):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-    for source in ['vci', 'VCI']:
+    for source in ['TCBS', 'VCI']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
                 start=start, end=end, interval='1D'
             )
             if df is None or df.empty: continue
-            cc = find_col(df, ['close', 'closeprice', 'close_price'])
+            cc = find_col(df, ['close','closeprice','close_price'])
             if cc is None:
                 nums = df.select_dtypes(include='number').columns
                 cc = nums[-1] if len(nums) > 0 else None
@@ -381,12 +388,12 @@ def fetch_price(symbol):
                 prev = float(df.iloc[-2][cc])
                 if 0 < prev < 1000: prev *= 1000
                 if prev > 0: chg = round((close - prev) / prev * 100, 2)
-            result = {'symbol': symbol, 'price': round(close, 0), 'change_pct': chg, 'source': source}
+            result = {'symbol': symbol, 'price': round(close,0), 'change_pct': chg, 'source': source}
             set_cache('price_' + symbol, result)
             return result
         except Exception as e:
             logger.warning(f"{symbol}/{source}: {e}")
-    return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Không tải được'}
+    return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Không thể tải'}
 
 def fetch_analysis(symbol, price_override=None):
     cache_key = f'analysis_{symbol}_{price_override or "live"}'
@@ -430,7 +437,7 @@ def api_whatif(symbol, target_price):
 @app.route('/api/market')
 def api_market():
     result = {}
-    for sym, name in [('VNINDEX', 'VN-INDEX'), ('HNX30', 'HNX-INDEX'), ('VN30F1M', 'VN30')]:
+    for sym, name in [('VNINDEX','VN-INDEX'),('HNX30','HNX-INDEX'),('VN30F1M','VN30')]:
         d = fetch_price(sym); result[sym] = {**d, 'name': name}; time.sleep(0.5)
     return jsonify(result)
 
