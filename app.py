@@ -34,7 +34,7 @@ def load_history(symbol, days=200):
 from datetime import datetime, timedelta
 end   = datetime.now().strftime("%Y-%m-%d")
 start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-for source in [‘TCBS’, ‘VCI’]:
+for source in ["TCBS", "VCI"]:
 try:
 from vnstock import Vnstock
 df = Vnstock().stock(symbol=symbol, source=source).quote.history(
