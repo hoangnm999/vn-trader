@@ -38,7 +38,7 @@ for source in ["TCBS", "VCI"]:
 try:
 from vnstock import Vnstock
 df = Vnstock().stock(symbol=symbol, source=source).quote.history(
-start=start, end=end, interval=‘1D’
+start=start, end=end, interval="1D"
 )
 if df is not None and len(df) >= 30:
 logger.info(f”{symbol}/{source} OK rows={len(df)}”)
