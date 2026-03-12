@@ -49,8 +49,8 @@ def load_history(symbol, days=200):
 def compute_indicators(df, price_override=None):
     import numpy as np
     
-    cc = find_col(df,['close', 'closeprice', 'close_price'])
-    hc = find_col(df,['high', 'highprice', 'high_price'])
+    cc = find_col(df, ['close', 'closeprice', 'close_price'])
+    hc = find_col(df, ['high', 'highprice', 'high_price'])
     lc = find_col(df,['low', 'lowprice', 'low_price'])
     vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volu'])
     
@@ -79,19 +79,11 @@ def compute_indicators(df, price_override=None):
     if lc and lows.max() < 1000:
         lows *= 1000
         
-    # Log raw df info for debugging
-    logger.info(f"DF columns: {list(df.columns)}")
-    for col in df.columns:
-        try:
-            sample_val = df[col].iloc[-1]
-            logger.info(f" col={col} last={sample_val} type={type(sample_val).__name__}")
-        except:
-            pass
-            
     # Robust volume detection - handle string values from VCI
     volumes = np.zeros(len(closes))
     vol_col_found = None
-    for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
+    for try_col in['volume', 'volume_match', 'klgd', 'vol', 'trading_volume',
+                    'match_volume', 'total_volume', 'dealVolume', 'matchingVolume']:
         fc = find_col(df, [try_col])
         if fc:
             v = pd.to_numeric(df[fc], errors='coerce').fillna(0).astype(float).values
@@ -115,8 +107,6 @@ def compute_indicators(df, price_override=None):
                 
     if vol_col_found is None:
         logger.warning(f"No volume col found in: {list(df.columns)}")
-    else:
-        logger.info(f"Volume OK: col={vol_col_found} today={volumes[-1]:.0f} ma20={np.mean(volumes[-20:]):.0f}")
         
     price = float(price_override) if price_override else float(closes[-1])
     prev_close = float(closes[-2]) if len(closes) > 1 else price
@@ -148,8 +138,8 @@ def compute_indicators(df, price_override=None):
             return 'none', ''
         p = price_arr[-lookback:]
         r = rsi_arr[-lookback:]
-        bottoms =[i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
-        tops =[i for i in range(1, len(p) - 1) if p[i] > p[i - 1] and p[i] > p[i + 1]]
+        bottoms = [i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
+        tops = [i for i in range(1, len(p) - 1) if p[i] > p[i - 1] and p[i] > p[i + 1]]
         
         if len(bottoms) >= 2:
             b1, b2 = bottoms[-2], bottoms[-1]
@@ -164,25 +154,30 @@ def compute_indicators(df, price_override=None):
         return 'none', ''
         
     div_type, div_msg = detect_divergence(closes, rsi_series)
+    
     ema12 = ema_arr(closes, 12)
     ema26 = ema_arr(closes, 26)
     macd_line = ema12 - ema26
     sig_line = ema_arr(macd_line, 9)
     macd_hist = macd_line - sig_line
+    
     macd_val = float(macd_line[-1])
     macd_sig = float(sig_line[-1])
     macd_h = float(macd_hist[-1])
+    
     ma20 = float(np.mean(closes[-20:]))
     ma50 = float(np.mean(closes[-min(50, len(closes)):]))
     ma20_prev = float(np.mean(closes[-21:-1])) if len(closes) >= 21 else ma20
     ma50_prev = float(np.mean(closes[-51:-1])) if len(closes) >= 51 else ma50
     golden_cross = ma20_prev < ma50_prev and ma20 > ma50
     death_cross = ma20_prev > ma50_prev and ma20 < ma50
+    
     bb_mid = float(np.mean(closes[-20:]))
     bb_std = float(np.std(closes[-20:]))
     bb_upper = bb_mid + 2 * bb_std
     bb_lower = bb_mid - 2 * bb_std
     bb_pct = (price - bb_lower) / (bb_upper - bb_lower) * 100 if bb_upper != bb_lower else 50
+    
     vol_today = float(volumes[-1]) if len(volumes) > 0 else 0
     vol_ma20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else vol_today
     vol_ratio = vol_today / vol_ma20 if vol_ma20 > 0 else 1.0
@@ -298,7 +293,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua ban + phan ky tang = tin hieu MUA rat manh
         if rsi_val < 35:
             score += 15
-            signals.append(('DIV', 'bull', div_msg + '[RSI qua ban xac nhan!]'))
+            signals.append(('DIV', 'bull', div_msg + ' [RSI qua ban xac nhan!]'))
         else:
             score += 10
             signals.append(('DIV', 'bull', div_msg))
@@ -461,7 +456,7 @@ def fetch_price(symbol):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-    for source in ['VCI', 'TCBS']:
+    for source in['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -590,7 +585,7 @@ def api_signals():
             results.append(cached)
             
     if len(results) < 3:
-        for sym in ['VCB', 'HPG', 'FPT']:
+        for sym in['VCB', 'HPG', 'FPT']:
             if any(r.get('symbol') == sym for r in results):
                 continue
             try:
@@ -616,7 +611,7 @@ def api_debug(symbol):
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
     
-    for source in ['VCI', 'TCBS']:
+    for source in['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=sym, source=source).quote.history(
