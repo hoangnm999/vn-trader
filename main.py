@@ -7,7 +7,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(**name**)
 
 def warmup_cache():
-“”“Build cache ngay khi server khởi động để /signals nhanh”””
 time.sleep(10)  # chờ Flask sẵn sàng
 try:
 import requests
