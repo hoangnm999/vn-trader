@@ -33,7 +33,7 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in ['TCBS', 'VCI']:
+    for source in ['vci', 'VCI']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -368,7 +368,7 @@ def fetch_price(symbol):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-    for source in ['TCBS', 'VCI']:
+    for source in ['vci', 'VCI']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
