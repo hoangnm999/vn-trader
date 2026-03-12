@@ -20,7 +20,7 @@ def set_cache(key, data):
 def find_col(df, names):
           for c in df.columns:
                 if c.lower() in names:
- return c
+           return c
  return None
 def load_history(symbol, days=200):
  from datetime import datetime, timedelta
