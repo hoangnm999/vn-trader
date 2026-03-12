@@ -41,7 +41,7 @@ df = Vnstock().stock(symbol=symbol, source=source).quote.history(
 start=start, end=end, interval="1D"
 )
 if df is not None and len(df) >= 30:
-logger.info(f”{symbol}/{source} OK rows={len(df)}”)
+logger.info(f'{symbol}/{source} OK rows={len(df)}')
 return df, source
 except Exception as e:
 logger.warning(f”{symbol}/{source}: {e}”)
