@@ -1,218 +1,266 @@
-import os
-import logging
-import time
-import threading
-import requests
-from datetime import datetime
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import os
+import time
+import logging
+from flask import Flask, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN   = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
-API_URL = os.environ.get('API_BASE_URL', 'http://localhost:5000')
+# Cache đơn giản tránh gọi API quá nhiều
+_cache = {}
+CACHE_TTL = 60  # giây
 
-def send_message(text: str, chat_id: str = None):
-    if not TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN chưa được set")
-        return False
-    cid = chat_id or CHAT_ID
-    if not cid:
-        logger.warning("TELEGRAM_CHAT_ID chưa được set")
-        return False
+def get_cached(key):
+    if key in _cache:
+        data, ts = _cache[key]
+        if time.time() - ts < CACHE_TTL:
+            return data
+    return None
+
+def set_cache(key, data):
+    _cache[key] = (data, time.time())
+
+# ── Lấy giá 1 cổ phiếu ───────────────────────────────────────────────────────
+def fetch_price(symbol: str) -> dict:
+    cached = get_cached(f"price_{symbol}")
+    if cached:
+        return cached
+
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        resp = requests.post(url, json={
-            'chat_id': cid,
-            'text': text,
-            'parse_mode': 'HTML'
-        }, timeout=10)
-        return resp.status_code == 200
-    except Exception as e:
-        logger.error(f"Send message error: {e}")
-        return False
+        from vnstock import Vnstock
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
+        df = stk.quote.intraday(symbol=symbol, page_size=10)
+        
+        if df is not None and not df.empty:
+            latest = df.iloc[-1]
+            # Thử các tên cột khác nhau của vnstock
+            price = 0
+            for col in ['price', 'lastPrice', 'close', 'matchPrice']:
+                if col in df.columns and latest[col] > 0:
+                    price = float(latest[col])
+                    break
+            
+            # Nếu giá nhỏ hơn 1000 → đang ở đơn vị nghìn đồng
+            if 0 < price < 1000:
+                price = price * 1000
 
-def get_api(endpoint: str) -> dict:
+            result = {
+                'symbol': symbol,
+                'price': price,
+                'change_pct': 0,
+                'source': 'TCBS_intraday'
+            }
+            set_cache(f"price_{symbol}", result)
+            return result
+    except Exception as e:
+        logger.warning(f"Intraday failed for {symbol}: {e}")
+
+    # Fallback: dùng dữ liệu lịch sử ngày hôm nay
     try:
-        r = requests.get(f"{API_URL}{endpoint}", timeout=15)
-        return r.json()
+        from vnstock import Vnstock
+        from datetime import datetime, timedelta
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
+        end = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+        df = stk.quote.history(start=start, end=end, interval='1D')
+
+        if df is not None and not df.empty:
+            latest = df.iloc[-1]
+            close = float(latest.get('close', latest.get('Close', 0)))
+            if 0 < close < 1000:
+                close *= 1000
+
+            prev_close = float(df.iloc[-2].get('close', df.iloc[-2].get('Close', close))) if len(df) > 1 else close
+            if 0 < prev_close < 1000:
+                prev_close *= 1000
+
+            change_pct = ((close - prev_close) / prev_close * 100) if prev_close > 0 else 0
+
+            result = {
+                'symbol': symbol,
+                'price': close,
+                'change_pct': round(change_pct, 2),
+                'source': 'TCBS_history'
+            }
+            set_cache(f"price_{symbol}", result)
+            return result
     except Exception as e:
-        logger.error(f"API error {endpoint}: {e}")
-        return {}
+        logger.error(f"History also failed for {symbol}: {e}")
 
-def handle_start(chat_id: str):
-    msg = (
-        "📈 <b>VN Trader Bot</b> — Chào mừng!\n\n"
-        "🤖 Bot phân tích kỹ thuật cổ phiếu HOSE/HNX\n\n"
-        "<b>Lệnh có thể dùng:</b>\n"
-        "/price VCB — Giá cổ phiếu VCB\n"
-        "/analyze FPT — Phân tích kỹ thuật FPT\n"
-        "/signals — Top tín hiệu MUA/BÁN\n"
-        "/market — Chỉ số thị trường\n"
-        "/help — Xem lại hướng dẫn\n\n"
-        "⚠️ <i>Bot chỉ phân tích kỹ thuật, không phải tư vấn đầu tư</i>"
-    )
-    send_message(msg, chat_id)
+    return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Không lấy được giá'}
 
-def handle_price(symbol: str, chat_id: str):
-    send_message(f"🔄 Đang lấy giá {symbol}...", chat_id)
-    data = get_api(f"/api/price/{symbol}")
-    if data.get('price', 0) > 0:
-        p = data['price']
-        chg = data.get('change_pct', 0)
-        arrow = '🔺' if chg >= 0 else '🔻'
-        msg = (
-            f"💹 <b>{symbol}</b>\n"
-            f"Giá: <b>{p:,.0f} đ</b>\n"
-            f"Thay đổi: {arrow} {chg:+.2f}%\n"
-            f"Nguồn: {data.get('source','TCBS')}"
-        )
-    else:
-        err = data.get('error', 'Không lấy được giá')
-        msg = f"❌ <b>{symbol}</b>: {err}\n<i>Thị trường có thể đang đóng cửa</i>"
-    send_message(msg, chat_id)
+# ── Phân tích kỹ thuật ────────────────────────────────────────────────────────
+def compute_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50
+    import numpy as np
+    deltas = np.diff(closes)
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    avg_g = np.mean(gains[-period:])
+    avg_l = np.mean(losses[-period:])
+    if avg_l == 0:
+        return 100
+    rs = avg_g / avg_l
+    return round(100 - 100 / (1 + rs), 1)
 
-def handle_analyze(symbol: str, chat_id: str):
-    send_message(f"🔬 Đang phân tích {symbol}...", chat_id)
-    data = get_api(f"/api/analyze/{symbol}")
-    if 'error' in data:
-        send_message(f"❌ {symbol}: {data['error']}", chat_id)
-        return
+def fetch_analysis(symbol: str) -> dict:
+    cached = get_cached(f"analysis_{symbol}")
+    if cached:
+        return cached
 
-    score  = data.get('score', 50)
-    action = data.get('action', 'THEO DÕI')
-    action_emoji = '🟢' if action == 'MUA' else ('🔴' if action == 'BÁN' else '🟡')
+    try:
+        from vnstock import Vnstock
+        from datetime import datetime, timedelta
+        import numpy as np
 
-    signals_text = '\n'.join([f"  • {s}" for s in data.get('signals', [])]) or '  • Không có tín hiệu rõ'
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
+        end = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
+        df = stk.quote.history(start=start, end=end, interval='1D')
 
-    msg = (
-        f"📊 <b>Phân tích {symbol}</b>\n\n"
-        f"💰 Giá: <b>{data.get('price',0):,.0f} đ</b>\n\n"
-        f"📈 Chỉ báo:\n"
-        f"  RSI(14): {data.get('rsi',0)}\n"
-        f"  MACD: {data.get('macd',0):+.1f}\n"
-        f"  EMA20: {data.get('ema20',0):,.0f}\n"
-        f"  BB: {data.get('bb_lower',0):,.0f} – {data.get('bb_upper',0):,.0f}\n\n"
-        f"🎯 Tín hiệu:\n{signals_text}\n\n"
-        f"⚡ Điểm tổng hợp: <b>{score}/100</b>\n"
-        f"{action_emoji} Khuyến nghị: <b>{action}</b>\n\n"
-        f"📌 Tham chiếu:\n"
-        f"  Vào lệnh: {data.get('entry',0):,.0f}\n"
-        f"  Stop Loss: {data.get('stop_loss',0):,.0f} (-5%)\n"
-        f"  Take Profit: {data.get('take_profit',0):,.0f} (+10%)\n\n"
-        f"⚠️ <i>Chỉ mang tính tham khảo, không phải tư vấn đầu tư</i>"
-    )
-    send_message(msg, chat_id)
+        if df is None or df.empty or len(df) < 30:
+            return {'symbol': symbol, 'error': 'Không đủ dữ liệu lịch sử'}
 
-def handle_signals(chat_id: str):
-    send_message("🔄 Đang quét tín hiệu...", chat_id)
-    data = get_api("/api/signals")
-    if not data:
-        send_message("❌ Không lấy được tín hiệu. Thử lại sau.", chat_id)
-        return
+        # Chuẩn hóa tên cột
+        col_map = {}
+        for c in df.columns:
+            cl = c.lower()
+            if 'close' in cl: col_map['close'] = c
+            elif 'open' in cl: col_map['open'] = c
+            elif 'high' in cl: col_map['high'] = c
+            elif 'low' in cl: col_map['low'] = c
+            elif 'vol' in cl: col_map['volume'] = c
 
-    msg = "🔔 <b>Top Tín Hiệu Hôm Nay</b>\n\n"
-    for item in data:
-        action = item.get('action', '')
-        emoji = '🟢' if action == 'MUA' else ('🔴' if action == 'BÁN' else '🟡')
-        msg += (
-            f"{emoji} <b>{item.get('symbol','')}</b> — {action}\n"
-            f"   Giá: {item.get('price',0):,.0f}đ | Score: {item.get('score',0)}/100\n"
-            f"   SL: {item.get('stop_loss',0):,.0f} | TP: {item.get('take_profit',0):,.0f}\n\n"
-        )
-    msg += "⚠️ <i>Không phải tư vấn đầu tư</i>"
-    send_message(msg, chat_id)
+        closes = df[col_map.get('close','close')].astype(float).values
+        if closes.max() < 1000:
+            closes = closes * 1000
 
-def handle_market(chat_id: str):
-    send_message("🔄 Đang lấy chỉ số...", chat_id)
-    data = get_api("/api/market")
-    msg = "🏦 <b>Chỉ số thị trường</b>\n\n"
-    for key, val in data.items():
-        if isinstance(val, dict):
-            p   = val.get('price', 0)
-            chg = val.get('change_pct', 0)
-            arr = '🔺' if chg >= 0 else '🔻'
-            name = val.get('name', key)
-            msg += f"{arr} <b>{name}</b>: {p:,.2f} ({chg:+.2f}%)\n"
-    if msg == "🏦 <b>Chỉ số thị trường</b>\n\n":
-        msg += "❌ Không lấy được dữ liệu. Thị trường có thể đang đóng cửa."
-    send_message(msg, chat_id)
+        price = closes[-1]
+        rsi = compute_rsi(closes)
 
-# ── Polling loop ──────────────────────────────────────────────────────────────
-def poll_updates():
-    if not TOKEN:
-        logger.error("Không có TELEGRAM_BOT_TOKEN — bot không thể chạy")
-        return
+        # EMA20, SMA50
+        ema20 = float(np.mean(closes[-20:]))  # simplified
+        sma50 = float(np.mean(closes[-50:])) if len(closes) >= 50 else float(np.mean(closes))
 
-    logger.info("🤖 Telegram bot bắt đầu polling...")
-    offset = 0
+        # MACD
+        ema12 = float(closes[-12:].mean())
+        ema26 = float(closes[-26:].mean()) if len(closes) >= 26 else ema12
+        macd = ema12 - ema26
 
-    while True:
+        # Bollinger Bands
+        bb_mid = float(closes[-20:].mean())
+        bb_std = float(closes[-20:].std())
+        bb_upper = bb_mid + 2 * bb_std
+        bb_lower = bb_mid - 2 * bb_std
+
+        # Tín hiệu
+        score = 50
+        signals = []
+        if rsi < 30:
+            score += 20; signals.append('RSI quá bán → MUA')
+        elif rsi > 70:
+            score -= 20; signals.append('RSI quá mua → BÁN')
+        if price > ema20:
+            score += 10; signals.append('Giá trên EMA20 → tích cực')
+        else:
+            score -= 10; signals.append('Giá dưới EMA20 → tiêu cực')
+        if macd > 0:
+            score += 10; signals.append('MACD dương → xu hướng tăng')
+        if price < bb_lower:
+            score += 10; signals.append('Giá chạm BB dưới → MUA')
+        elif price > bb_upper:
+            score -= 10; signals.append('Giá chạm BB trên → BÁN')
+
+        score = max(0, min(100, score))
+        if score >= 65:
+            action = 'MUA'
+        elif score <= 35:
+            action = 'BÁN'
+        else:
+            action = 'THEO DÕI'
+
+        result = {
+            'symbol': symbol,
+            'price': round(price, 0),
+            'rsi': rsi,
+            'macd': round(macd, 1),
+            'ema20': round(ema20, 0),
+            'sma50': round(sma50, 0),
+            'bb_upper': round(bb_upper, 0),
+            'bb_lower': round(bb_lower, 0),
+            'score': score,
+            'action': action,
+            'signals': signals,
+            'entry': round(price, 0),
+            'stop_loss': round(price * 0.95, 0),
+            'take_profit': round(price * 1.10, 0),
+        }
+        set_cache(f"analysis_{symbol}", result)
+        return result
+
+    except Exception as e:
+        logger.error(f"Analysis error {symbol}: {e}")
+        return {'symbol': symbol, 'error': str(e)}
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.route('/')
+def index():
+    return jsonify({'status': 'ok', 'message': 'VN Trader API đang chạy ✅'})
+
+@app.route('/api/price/<symbol>')
+def api_price(symbol):
+    return jsonify(fetch_price(symbol.upper()))
+
+@app.route('/api/prices')
+def api_prices():
+    symbols = ['VCB', 'HPG', 'VHM', 'FPT', 'MWG', 'TCB', 'BID', 'VNM']
+    results = {}
+    for sym in symbols:
+        results[sym] = fetch_price(sym)
+        time.sleep(0.3)  # tránh rate limit
+    return jsonify(results)
+
+@app.route('/api/analyze/<symbol>')
+def api_analyze(symbol):
+    return jsonify(fetch_analysis(symbol.upper()))
+
+@app.route('/api/market')
+def api_market():
+    # Chỉ số thị trường — vnstock 3.2.0
+    try:
+        from vnstock import Vnstock
+        result = {}
+        for idx_sym, idx_name in [('VNINDEX','VN-INDEX'), ('HNX','HNX-INDEX'), ('VN30','VN30')]:
+            try:
+                d = fetch_price(idx_sym)
+                result[idx_sym] = {**d, 'name': idx_name}
+            except:
+                result[idx_sym] = {'name': idx_name, 'price': 0, 'change_pct': 0}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+@app.route('/api/signals')
+def api_signals():
+    watchlist = ['VCB', 'HPG', 'FPT', 'MWG', 'TCB', 'VHM', 'BID', 'VNM', 'GAS', 'CTG']
+    signals = []
+    for sym in watchlist:
         try:
-            url  = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-            resp = requests.get(url, params={'offset': offset, 'timeout': 30}, timeout=35)
-            updates = resp.json().get('result', [])
-
-            for upd in updates:
-                offset = upd['update_id'] + 1
-                msg = upd.get('message', {})
-                if not msg:
-                    continue
-
-                chat_id = str(msg.get('chat', {}).get('id', ''))
-                text    = msg.get('text', '').strip()
-                if not text:
-                    continue
-
-                logger.info(f"Nhận lệnh từ {chat_id}: {text}")
-                parts = text.split()
-                cmd   = parts[0].lower().split('@')[0]  # bỏ @botname nếu có
-
-                if cmd in ('/start', '/help'):
-                    handle_start(chat_id)
-                elif cmd == '/price':
-                    sym = parts[1].upper() if len(parts) > 1 else 'VCB'
-                    handle_price(sym, chat_id)
-                elif cmd == '/analyze':
-                    sym = parts[1].upper() if len(parts) > 1 else 'VCB'
-                    handle_analyze(sym, chat_id)
-                elif cmd == '/signals':
-                    handle_signals(chat_id)
-                elif cmd == '/market':
-                    handle_market(chat_id)
-                else:
-                    send_message(
-                        "❓ Lệnh không nhận ra.\nGõ /help để xem danh sách lệnh.",
-                        chat_id
-                    )
-
-        except requests.exceptions.Timeout:
-            pass  # timeout bình thường với long polling
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-            time.sleep(5)
-
-# ── Gửi báo cáo buổi sáng tự động ────────────────────────────────────────────
-def morning_report_scheduler():
-    if not CHAT_ID:
-        return
-    logger.info("📅 Morning report scheduler started")
-    while True:
-        now = datetime.now()
-        # Gửi lúc 8:45 sáng các ngày trong tuần
-        if now.weekday() < 5 and now.hour == 8 and now.minute == 45:
-            logger.info("📨 Gửi báo cáo buổi sáng...")
-            send_message("🌅 <b>Báo cáo buổi sáng</b> — Đang quét tín hiệu...", CHAT_ID)
-            handle_signals(CHAT_ID)
-            time.sleep(70)  # tránh gửi lại trong cùng phút
-        time.sleep(30)
-
-def main():
-    # Chạy morning report trong thread riêng
-    t1 = threading.Thread(target=morning_report_scheduler, daemon=True)
-    t1.start()
-    # Chạy polling (blocking)
-    poll_updates()
+            r = fetch_analysis(sym)
+            if 'score' in r:
+                signals.append(r)
+            time.sleep(0.5)
+        except:
+            pass
+    signals.sort(key=lambda x: abs(x.get('score', 50) - 50), reverse=True)
+    return jsonify(signals[:5])
 
 if __name__ == '__main__':
-    main()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
