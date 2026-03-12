@@ -7,6 +7,7 @@ from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 API_URL = os.environ.get('API_BASE_URL', 'http://localhost:8080')
@@ -15,8 +16,10 @@ def send(text, chat_id=None):
     cid = chat_id or CHAT_ID
     if not TOKEN or not cid:
         return False
+        
     MAX = 3800
     chunks =[]
+    
     if len(text) <= MAX:
         chunks = [text]
     else:
@@ -95,7 +98,7 @@ def build_analysis_msg(data, prefix='Phan tich'):
     ae = action_emoji(action)
     sigs = data.get('signals',[])
     ichi = data.get('ichimoku', {})
-    sups = data.get('supports', [])
+    sups = data.get('supports',[])
     ress = data.get('resistances',[])
     div = data.get('rsi_divergence', {})
     vr = data.get('vol_ratio', 1.0)
@@ -115,8 +118,8 @@ def build_analysis_msg(data, prefix='Phan tich'):
         
     sup_txt = ', '.join(f'{s["price"]:,.0f}({s["count"]}x)' for s in sups[:2]) if sups else ''
     res_txt = ', '.join(f'{r["price"]:,.0f}({r["count"]}x)' for r in ress[:2]) if ress else ''
-    cross_line = ''
     
+    cross_line = ''
     if gc:
         cross_line = '\n GOLDEN CROSS vua xuat hien!'
     if dc:
@@ -128,7 +131,7 @@ def build_analysis_msg(data, prefix='Phan tich'):
         
     tio_line = ''
     if tio:
-        tio_line = '\n\nHOI TU 3-TRONG-1: Gia tren MA20 + Vol dot bien + RSI hop le -> Du dieu kien'
+        tio_line = '\n\nHOI TU 3-TRONG-1: Gia tren MA20 + Vol dot bien + RSI hop le -&gt; Du dieu kien'
         
     rsi_lines = get_group(sigs, 'RSI')
     div_lines = get_group(sigs, 'DIV')
@@ -142,9 +145,9 @@ def build_analysis_msg(data, prefix='Phan tich'):
     msg = (
         '<b>' + prefix + ' ' + sym + '</b>\n'
         + '=' * 30 + '\n'
-        + 'Gia: <b>' + f'{price:,.0f}' + 'd</b> Diem: <b>' + str(score) + '/100</b> ' + ae  + tio_line + div_line + '\n\n'
-        + '<b>1. RSI(14)</b>\n' + (rsi_lines or ' -> Trung tinh') + '\n\n'
-        + '<b>2. RSI Phan ky</b>\n' + (div_lines or ' -> Khong phat hien phan ky') + '\n\n'
+        + 'Gia: <b>' + f'{price:,.0f}' + 'd</b> Diem: <b>' + str(score) + '/100</b> ' + ae + tio_line + div_line + '\n\n'
+        + '<b>1. RSI(14)</b>\n' + (rsi_lines or ' -&gt; Trung tinh') + '\n\n'
+        + '<b>2. RSI Phan ky</b>\n' + (div_lines or ' -&gt; Khong phat hien phan ky') + '\n\n'
         + '<b>3. MACD</b>\n'
         + ' Line:' + f'{data.get("macd", 0):+.0f}' + ' Sig:' + f'{data.get("macd_signal", 0):+.0f}' + '\n' + (macd_lines or '') + '\n\n'
         + '<b>4. MA20 & MA50</b>\n'
@@ -220,9 +223,9 @@ def handle_whatif(symbol, target, chat_id):
     if actual > 0:
         dp = (target - actual) / actual * 100
         if dp < -0.5:
-            send('Gia hien tai ' + f'{actual:,.0f}' + 'd -> can giam them ' + f'{abs(dp):.1f}%', chat_id)
+            send('Gia hien tai ' + f'{actual:,.0f}' + 'd -&gt; can giam them ' + f'{abs(dp):.1f}%', chat_id)
         elif dp > 0.5:
-            send('Gia hien tai ' + f'{actual:,.0f}' + 'd -> da vuot muc nay ' + f'{dp:.1f}%', chat_id)
+            send('Gia hien tai ' + f'{actual:,.0f}' + 'd -&gt; da vuot muc nay ' + f'{dp:.1f}%', chat_id)
     send(build_analysis_msg(d, prefix='What-If @' + f'{target:,.0f}' + 'd -'), chat_id)
 
 def handle_signals(chat_id):
@@ -243,6 +246,7 @@ def handle_signals(chat_id):
         p = item.get('price', 0)
         ct = ichi.get('cloud_top', 0)
         cb = ichi.get('cloud_bottom', 0)
+        
         if p > ct:
             is_ = 'Tren may'
         elif p < cb:
@@ -250,8 +254,8 @@ def handle_signals(chat_id):
         else:
             is_ = 'Trong may'
             
-        sups = item.get('supports',[])
-        ress = item.get('resistances', [])
+        sups = item.get('supports', [])
+        ress = item.get('resistances',[])
         div_txt = '\n PHAN KY: ' + div['message'] if div.get('type') != 'none' and div.get('message') else ''
         tio_txt = '\n HOI TU 3-TRONG-1!' if tio else ''
         
@@ -295,7 +299,7 @@ def poll_updates():
                 params={'offset': offset, 'timeout': 30},
                 timeout=35
             )
-            for upd in resp.json().get('result', []):
+            for upd in resp.json().get('result',[]):
                 offset = upd['update_id'] + 1
                 msg = upd.get('message', {})
                 if not msg:
@@ -307,6 +311,7 @@ def poll_updates():
                 logger.info('CMD: ' + text)
                 parts = text.split()
                 cmd = parts[0].lower().split('@')[0]
+                
                 if cmd in ('/start', '/help'):
                     handle_start(cid)
                 elif cmd == '/price':
@@ -337,11 +342,11 @@ def poll_updates():
             time.sleep(5)
 
 # ── Cấu hình alert ──────────────────────────────────────────────────────────
-SCORE_STRONG_BUY = 72 # >= 72 -> MUA manh
-SCORE_STRONG_SELL = 28 # <= 28 -> BAN manh
+SCORE_STRONG_BUY = 72 # >= 72 -&gt; MUA manh
+SCORE_STRONG_SELL = 28 # <= 28 -&gt; BAN manh
 ALERT_INTERVAL = 30 # phut
 TRADING_HOURS = ((9, 0), (15, 0)) # 9:00 - 15:00 gio VN
-_last_alerts = {} # sym -> (score, timestamp) - tranh gui lap
+_last_alerts = {} # sym -&gt; (score, timestamp) - tranh gui lap
 
 def is_trading_hours():
     now = datetime.now()
