@@ -63,7 +63,7 @@ def fetch_price(symbol: str) -> dict:
     try:
         from vnstock import Vnstock
         from datetime import datetime, timedelta
-        stk = Vnstock().stock(symbol=symbol, source='TCBS')
+        stk = Vnstock().stock(symbol=symbol, source='VCI')
         end = datetime.now().strftime('%Y-%m-%d')
         start = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
         df = stk.quote.history(start=start, end=end, interval='1D')
