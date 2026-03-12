@@ -33,7 +33,7 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in ['VCI', 'TCBS']:
+    for source in['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -49,10 +49,10 @@ def load_history(symbol, days=200):
 def compute_indicators(df, price_override=None):
     import numpy as np
     
-    cc = find_col(df,['close', 'closeprice', 'close_price'])
-    hc = find_col(df,['high', 'highprice', 'high_price'])
-    lc = find_col(df,['low', 'lowprice', 'low_price'])
-    vc = find_col(df,['volume', 'volume_match', 'klgd'])
+    cc = find_col(df, ['close', 'closeprice', 'close_price'])
+    hc = find_col(df, ['high', 'highprice', 'high_price'])
+    lc = find_col(df, ['low', 'lowprice', 'low_price'])
+    vc = find_col(df, ['volume', 'volume_match', 'klgd'])
     
     if cc is None:
         nums = df.select_dtypes(include='number').columns
@@ -184,13 +184,13 @@ def compute_indicators(df, price_override=None):
     }
 
     def find_sr(h, l, window=5):
-        levels = []
+        levels =[]
         for i in range(window, len(h) - window):
             if h[i] == max(h[i - window:i + window + 1]):
                 levels.append(('R', float(h[i])))
             if l[i] == min(l[i - window:i + window + 1]):
                 levels.append(('S', float(l[i])))
-        merged = []
+        merged =[]
         levels.sort(key=lambda x: x[1])
         for typ, lvl in levels:
             found = False
@@ -201,7 +201,7 @@ def compute_indicators(df, price_override=None):
                     break
             if not found:
                 merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
-        strong =[m for m in merged if m['count'] >= 2]
+        strong = [m for m in merged if m['count'] >= 2]
         strong.sort(key=lambda x: x['count'], reverse=True)
         sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
@@ -335,6 +335,32 @@ def compute_indicators(df, price_override=None):
     else:
         action = 'THEO DOI'
         
+    # SL/TP/Rebuy theo huong lenh
+    # Thi truong VN khong co short selling
+    # Tin hieu BAN = nen ban co phieu dang nam + cho mua lai o vung ho tro
+    if action == 'MUA':
+        stop_loss = round(price * 0.93, 0) # Cat lo -7%
+        take_profit = round(price * 1.14, 0) # Chot loi +14%
+        sl_label = '-7%'
+        tp_label = '+14%'
+        rebuy_zone = None
+    elif action == 'BAN':
+        stop_loss = price # Gia nen ban = gia hien tai
+        # Vung mua lai = vung ho tro gan nhat hoac -10%
+        if supports:
+            rebuy_zone = supports[0]['price']
+        else:
+            rebuy_zone = round(price * 0.90, 0)
+        take_profit = rebuy_zone # Dung take_profit luu vung mua lai
+        sl_label = 'Nen ban ngay'
+        tp_label = 'Vung mua lai'
+    else:
+        stop_loss = round(price * 0.93, 0)
+        take_profit = round(price * 1.07, 0)
+        rebuy_zone = None
+        sl_label = '-7% neu da mua'
+        tp_label = '+7% tham khao'
+        
     return {
         'price': round(price, 0),
         'rsi': rsi_val,
@@ -361,8 +387,10 @@ def compute_indicators(df, price_override=None):
         'signals': signals,
         'three_in_one': three_in_one,
         'entry': round(price, 0),
-        'stop_loss': round(price * 0.93, 0),
-        'take_profit': round(price * 1.14, 0),
+        'stop_loss': stop_loss,
+        'take_profit': take_profit,
+        'sl_label': sl_label,
+        'tp_label': tp_label,
     }
 
 def fetch_price(symbol):
@@ -489,7 +517,7 @@ def api_signals():
         if cached and 'score' in cached and 'error' not in cached:
             results.append(cached)
     if len(results) < 3:
-        for sym in['VCB', 'HPG', 'FPT']:
+        for sym in ['VCB', 'HPG', 'FPT']:
             if any(r.get('symbol') == sym for r in results):
                 continue
             try:
