@@ -32,7 +32,7 @@ def fetch_price(symbol: str) -> dict:
 
     try:
         from vnstock import Vnstock
-        stk = Vnstock().stock(symbol=symbol, source='VCI')
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
         df = stk.quote.intraday(symbol=symbol, page_size=10)
         
         if df is not None and not df.empty:
@@ -63,7 +63,7 @@ def fetch_price(symbol: str) -> dict:
     try:
         from vnstock import Vnstock
         from datetime import datetime, timedelta
-        stk = Vnstock().stock(symbol=symbol, source='VCI')
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
         end = datetime.now().strftime('%Y-%m-%d')
         start = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
         df = stk.quote.history(start=start, end=end, interval='1D')
@@ -118,7 +118,7 @@ def fetch_analysis(symbol: str) -> dict:
         from datetime import datetime, timedelta
         import numpy as np
 
-        stk = Vnstock().stock(symbol=symbol, source='VCI')
+        stk = Vnstock().stock(symbol=symbol, source='TCBS')
         end = datetime.now().strftime('%Y-%m-%d')
         start = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
         df = stk.quote.history(start=start, end=end, interval='1D')
@@ -263,5 +263,3 @@ def api_signals():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-    python# v2
-
