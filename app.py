@@ -21,7 +21,7 @@ def find_col(df, names):
           for c in df.columns:
                 if c.lower() in names:
                        return c
- return None
+          return None
 def load_history(symbol, days=200):
  from datetime import datetime, timedelta
  end = datetime.now().strftime('%Y-%m-%d')
