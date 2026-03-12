@@ -17,9 +17,9 @@ def get_cached(key):
     return None
 def set_cache(key, data):
     _cache[key] = (data, time.time())
-          def find_col(df, names):
+def find_col(df, names):
           for c in df.columns:
-          if c.lower() in names:
+                if c.lower() in names:
  return c
  return None
 def load_history(symbol, days=200):
