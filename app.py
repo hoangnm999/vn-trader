@@ -32,7 +32,7 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in ['VCI', 'TCBS']:
+    for source in['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -48,8 +48,8 @@ def load_history(symbol, days=200):
 def compute_indicators(df, price_override=None):
     import numpy as np
     cc = find_col(df,['close', 'closeprice', 'close_price'])
-    hc = find_col(df,['high', 'highprice', 'high_price'])
-    lc = find_col(df,['low', 'lowprice', 'low_price'])
+    hc = find_col(df, ['high', 'highprice', 'high_price'])
+    lc = find_col(df, ['low', 'lowprice', 'low_price'])
     vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume'])
     
     if cc is None:
@@ -131,7 +131,7 @@ def compute_indicators(df, price_override=None):
             return 'none', ''
         p = price_arr[-lookback:]
         r = rsi_arr[-lookback:]
-        bottoms =[i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
+        bottoms = [i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
         tops =[i for i in range(1, len(p) - 1) if p[i] > p[i - 1] and p[i] > p[i + 1]]
         if len(bottoms) >= 2:
             b1, b2 = bottoms[-2], bottoms[-1]
@@ -492,15 +492,17 @@ def fetch_price(symbol):
             return result
         except Exception as e:
             logger.warning(f"{symbol}/{source}: {e}")
-            
     return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Khong tai duoc gia'}
 
 def fetch_analysis(symbol, price_override=None):
     cache_key = 'analysis_' + symbol + '_' + (str(price_override) if price_override else 'live')
-    cached = get_cached(cache_key)
-    if cached:
-        return cached
-        
+    # Chi dung cache neu vol_ma20 > 0 (tranh cache cu bi loi)
+    if not price_override:
+        cached = get_cached(cache_key)
+        if cached and cached.get('vol_ma20', 0) > 0:
+            return cached
+            
+    # Compute truc tiep
     df, source = load_history(symbol, days=200)
     if df is None:
         return {'symbol': symbol, 'error': 'Khong tai duoc du lieu'}
@@ -514,16 +516,12 @@ def fetch_analysis(symbol, price_override=None):
     if result is None:
         return {'symbol': symbol, 'error': 'Khong tinh duoc chi bao'}
         
-    # Khong cache neu volume bi loi (vol_ma20=0)
-    if result.get('vol_ma20', 0) == 0:
-        logger.warning(f"{symbol}: vol_ma20=0, skip cache")
-        result['symbol'] = symbol
-        result['source'] = source
-        return result
-        
     result['symbol'] = symbol
     result['source'] = source
-    set_cache(cache_key, result)
+    
+    # Chi luu cache khi volume hop le
+    if result.get('vol_ma20', 0) > 0:
+        set_cache(cache_key, result)
     return result
 
 @app.route('/')
