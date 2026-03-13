@@ -6,6 +6,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ def load_history(symbol, days=200):
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    for source in['VCI', 'TCBS']:
+    
+    for source in ['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -43,11 +45,13 @@ def load_history(symbol, days=200):
                 return df, source
         except Exception as e:
             logger.warning(f"{symbol}/{source}: {e}")
+            
     return None, None
 
 def compute_indicators(df, price_override=None):
     import numpy as np
-    cc = find_col(df,['close', 'closeprice', 'close_price'])
+    
+    cc = find_col(df, ['close', 'closeprice', 'close_price'])
     hc = find_col(df, ['high', 'highprice', 'high_price'])
     lc = find_col(df, ['low', 'lowprice', 'low_price'])
     vc = find_col(df,['volume', 'volume_match', 'klgd', 'vol', 'trading_volume', 'match_volume'])
@@ -55,9 +59,10 @@ def compute_indicators(df, price_override=None):
     if cc is None:
         nums = df.select_dtypes(include='number').columns
         cc = nums[-1] if len(nums) > 0 else None
-        if cc is None:
-            return None
-            
+        
+    if cc is None:
+        return None
+        
     import pandas as pd
     def to_float_arr(series):
         # Handle string numbers like "77.7" or "12722400"
@@ -66,9 +71,11 @@ def compute_indicators(df, price_override=None):
     closes = to_float_arr(df[cc])
     if closes.max() < 1000:
         closes *= 1000
+        
     highs = to_float_arr(df[hc]) if hc else closes.copy()
     if hc and highs.max() < 1000:
         highs *= 1000
+        
     lows = to_float_arr(df[lc]) if lc else closes.copy()
     if lc and lows.max() < 1000:
         lows *= 1000
@@ -89,7 +96,7 @@ def compute_indicators(df, price_override=None):
     # Fallback: any column with large values
     if vol_col_found is None:
         for col in df.columns:
-            if col in [cc, hc, lc]:
+            if col in[cc, hc, lc]:
                 continue
             v = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(float).values
             if v.max() > 100000:
@@ -131,16 +138,19 @@ def compute_indicators(df, price_override=None):
             return 'none', ''
         p = price_arr[-lookback:]
         r = rsi_arr[-lookback:]
-        bottoms = [i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
+        bottoms =[i for i in range(1, len(p) - 1) if p[i] < p[i - 1] and p[i] < p[i + 1]]
         tops =[i for i in range(1, len(p) - 1) if p[i] > p[i - 1] and p[i] > p[i + 1]]
+        
         if len(bottoms) >= 2:
             b1, b2 = bottoms[-2], bottoms[-1]
             if p[b2] < p[b1] and r[b2] > r[b1] + 2:
-                return 'bullish', ('Phan ky tang: Gia day moi (' + f'{p[b2]:,.0f}' + ') thap hon day cu nhung RSI cao hon')
+                return 'bullish', ('Phan ky tang: Gia day moi (' + f'{p[b2]:,.0f}' + ') thap hon')
+                
         if len(tops) >= 2:
             t1, t2 = tops[-2], tops[-1]
             if p[t2] > p[t1] and r[t2] < r[t1] - 2:
-                return 'bearish', ('Phan ky giam: Gia dinh moi (' + f'{p[t2]:,.0f}' + ') cao hon dinh cu nhung RSI thap hon')
+                return 'bearish', ('Phan ky giam: Gia dinh moi (' + f'{p[t2]:,.0f}' + ') cao hon')
+                
         return 'none', ''
         
     div_type, div_msg = detect_divergence(closes, rsi_series)
@@ -150,6 +160,7 @@ def compute_indicators(df, price_override=None):
     macd_line = ema12 - ema26
     sig_line = ema_arr(macd_line, 9)
     macd_hist = macd_line - sig_line
+    
     macd_val = float(macd_line[-1])
     macd_sig = float(sig_line[-1])
     macd_h = float(macd_hist[-1])
@@ -158,6 +169,7 @@ def compute_indicators(df, price_override=None):
     ma50 = float(np.mean(closes[-min(50, len(closes)):]))
     ma20_prev = float(np.mean(closes[-21:-1])) if len(closes) >= 21 else ma20
     ma50_prev = float(np.mean(closes[-51:-1])) if len(closes) >= 51 else ma50
+    
     golden_cross = ma20_prev < ma50_prev and ma20 > ma50
     death_cross = ma20_prev > ma50_prev and ma20 < ma50
     
@@ -189,10 +201,10 @@ def compute_indicators(df, price_override=None):
     
     if vol_ratio >= 1.5 and price_up:
         vol_signal = 'shark_buy'
-        vol_msg = 'Vol ' + f'{vol_ratio:.1f}' + 'x TB + gia tang -> Dong tien lon vao! Xac nhan tang'
+        vol_msg = 'Vol ' + f'{vol_ratio:.1f}' + 'x TB + gia tang -> Dong tien lon vao! Xac nhan'
     elif vol_ratio >= 1.5 and not price_up:
         vol_signal = 'shark_sell'
-        vol_msg = 'Vol ' + f'{vol_ratio:.1f}' + 'x TB + gia giam -> Dong tien lon xa! Tin hieu giam'
+        vol_msg = 'Vol ' + f'{vol_ratio:.1f}' + 'x TB + gia giam -> Dong tien lon xa! Tin hieu xau'
     elif vol_ratio < 0.7 and price_up:
         vol_signal = 'fake_rally'
         vol_msg = 'Gia tang nhung Vol thap ' + f'{vol_ratio:.1f}' + 'x TB -> Co the keo xa, can than'
@@ -213,7 +225,6 @@ def compute_indicators(df, price_override=None):
     span_b = (np.max(highs[-52:]) + np.min(lows[-52:])) / 2 if n >= 52 else price
     cloud_top = round(max(float(span_a), float(span_b)), 0)
     cloud_bottom = round(min(float(span_a), float(span_b)), 0)
-    
     ichi = {
         'tenkan': round(float(tenkan), 0),
         'kijun': round(float(kijun), 0),
@@ -231,6 +242,7 @@ def compute_indicators(df, price_override=None):
                 levels.append(('R', float(h[i])))
             if l[i] == min(l[i - window:i + window + 1]):
                 levels.append(('S', float(l[i])))
+                
         merged = []
         levels.sort(key=lambda x: x[1])
         for typ, lvl in levels:
@@ -242,9 +254,10 @@ def compute_indicators(df, price_override=None):
                     break
             if not found:
                 merged.append({'type': typ, 'price': round(lvl, 0), 'count': 1})
-        strong =[m for m in merged if m['count'] >= 2]
+                
+        strong = [m for m in merged if m['count'] >= 2]
         strong.sort(key=lambda x: x['count'], reverse=True)
-        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)[:3]
+        sups = sorted([m for m in strong if m['price'] < price], key=lambda x: x['price'], reverse=True)
         ress = sorted([m for m in strong if m['price'] > price], key=lambda x: x['price'])[:3]
         return sups, ress
         
@@ -282,13 +295,13 @@ def compute_indicators(df, price_override=None):
         
     if rsi_val < 30:
         score += 15
-        signals.append(('RSI', 'bull', 'RSI=' + str(rsi_val) + ' Vung qua ban -> Tim co hoi mua'))
+        signals.append(('RSI', 'bull', 'RSI=' + str(rsi_val) + ' Vung qua ban -&gt; Tim co hoi'))
     elif rsi_val < 40:
         score += 7
         signals.append(('RSI', 'bull', 'RSI=' + str(rsi_val) + ' Vung yeu, dang hoi phuc'))
     elif rsi_val > 70:
         score -= 15
-        signals.append(('RSI', 'bear', 'RSI=' + str(rsi_val) + ' Vung qua mua -> KHONG mua'))
+        signals.append(('RSI', 'bear', 'RSI=' + str(rsi_val) + ' Vung qua mua -&gt; KHONG mua'))
     elif rsi_val > 60:
         score -= 7
         signals.append(('RSI', 'bear', 'RSI=' + str(rsi_val) + ' Vung manh, than trong'))
@@ -299,7 +312,7 @@ def compute_indicators(df, price_override=None):
         # RSI qua ban + phan ky tang = tin hieu MUA rat manh
         if rsi_val < 35:
             score += 15
-            signals.append(('DIV', 'bull', div_msg + ' [RSI qua ban xac nhan!]'))
+            signals.append(('DIV', 'bull', div_msg + '[RSI qua ban xac nhan!]'))
         else:
             score += 10
             signals.append(('DIV', 'bull', div_msg))
@@ -316,29 +329,29 @@ def compute_indicators(df, price_override=None):
         
     if golden_cross:
         score += 20
-        signals.append(('MA', 'bull', 'GOLDEN CROSS! MA20 cat len MA50 -> Tang manh dai han'))
+        signals.append(('MA', 'bull', 'GOLDEN CROSS! MA20 cat len MA50 -&gt; Tang manh dai han'))
     elif death_cross:
         score -= 20
-        signals.append(('MA', 'bear', 'DEATH CROSS! MA20 cat xuong MA50 -> Giam dai han!'))
+        signals.append(('MA', 'bear', 'DEATH CROSS! MA20 cat xuong MA50 -&gt; Giam dai han!'))
     elif price > ma20 and ma20 > ma50:
         score += 15
-        signals.append(('MA', 'bull', 'Gia>MA20(' + f'{ma20:,.0f}' + ')>MA50(' + f'{ma50:,.0f}' + ')'))
+        signals.append(('MA', 'bull', 'Gia&gt;MA20(' + f'{ma20:,.0f}' + ')&gt;MA50(' + f'{ma50:,.0f}' + ')'))
     elif price > ma20:
         score += 10
-        signals.append(('MA', 'bull', 'Gia tren MA20 ' + f'{ma20:,.0f}' + ' -> Xu huong ngan tang'))
+        signals.append(('MA', 'bull', 'Gia tren MA20 ' + f'{ma20:,.0f}' + ' -&gt; Xu huong ngan han tang'))
     elif price < ma20 and ma20 < ma50:
         score -= 15
-        signals.append(('MA', 'bear', 'Gia<MA20<MA50 -> Giam 2 tang - KHONG mua duoi'))
+        signals.append(('MA', 'bear', 'Gia&lt;MA20&lt;MA50 -&gt; Giam 2 tang - KHONG mua duoi'))
     else:
         score -= 10
         signals.append(('MA', 'bear', 'Gia duoi MA20 ' + f'{ma20:,.0f}' + ' - KHONG mua duoi!'))
         
     if macd_val > macd_sig and macd_h > 0:
         score += 3
-        signals.append(('MACD', 'bull', 'MACD cat len Signal -> Dong luc tang'))
+        signals.append(('MACD', 'bull', 'MACD cat len Signal -&gt; Dong luc tang'))
     elif macd_val < macd_sig and macd_h < 0:
         score -= 3
-        signals.append(('MACD', 'bear', 'MACD cat xuong Signal -> Dong luc giam'))
+        signals.append(('MACD', 'bear', 'MACD cat xuong Signal -&gt; Dong luc giam'))
     else:
         signals.append(('MACD', 'neutral', 'MACD=' + f'{macd_val:+.0f}'))
         
@@ -351,7 +364,7 @@ def compute_indicators(df, price_override=None):
             signals.append(('SR', 'bull', 'Gia gan HT manh ' + f'{supports[0]["price"]:,.0f}'))
         elif dist_s < 4:
             score += 5
-            signals.append(('SR', 'bull', 'HT gan: ' + f'{supports[0]["price"]:,.0f}' + ' (can chu y)'))
+            signals.append(('SR', 'bull', 'HT gan: ' + f'{supports[0]["price"]:,.0f}' + ' (can than)'))
         else:
             signals.append(('SR', 'neutral', 'HT gan nhat: ' + f'{supports[0]["price"]:,.0f}'))
             
@@ -364,25 +377,25 @@ def compute_indicators(df, price_override=None):
             signals.append(('SR', 'bear', 'Gia gan KC manh ' + f'{resistances[0]["price"]:,.0f}'))
         elif dist_r < 4:
             score -= 5
-            signals.append(('SR', 'bear', 'KC gan: ' + f'{resistances[0]["price"]:,.0f}'))
+            signals.append(('SR', 'bear', 'KC gan: ' + f'{resistances[0]["price"]:,.0f}' + ' (can than)'))
         else:
             signals.append(('SR', 'neutral', 'KC gan nhat: ' + f'{resistances[0]["price"]:,.0f}'))
             
     if price > cloud_top:
         score += 5
-        signals.append(('ICHI', 'bull', 'Gia tren may Ichimoku -> Xu huong tang'))
+        signals.append(('ICHI', 'bull', 'Gia tren may Ichimoku -&gt; Xu huong tang'))
     elif price < cloud_bottom:
         score -= 5
-        signals.append(('ICHI', 'bear', 'Gia duoi may Ichimoku -> Xu huong giam'))
+        signals.append(('ICHI', 'bear', 'Gia duoi may Ichimoku -&gt; Xu huong giam'))
     else:
-        signals.append(('ICHI', 'neutral', 'Gia trong may -> Khong ro xu huong'))
+        signals.append(('ICHI', 'neutral', 'Gia trong may -&gt; Khong ro xu huong'))
         
     if price <= bb_lower:
         score += 3
-        signals.append(('BB', 'bull', 'Gia cham BB duoi ' + f'{bb_lower:,.0f}' + ' -> Ho tro'))
+        signals.append(('BB', 'bull', 'Gia cham BB duoi ' + f'{bb_lower:,.0f}' + ' -&gt; Ho tro'))
     elif price >= bb_upper:
         score -= 3
-        signals.append(('BB', 'bear', 'Gia cham BB tren ' + f'{bb_upper:,.0f}' + ' -> Khang cu'))
+        signals.append(('BB', 'bear', 'Gia cham BB tren ' + f'{bb_upper:,.0f}' + ' -&gt; Khang cu'))
     else:
         signals.append(('BB', 'neutral', 'Gia trong BB (' + f'{bb_pct:.0f}' + '% trong dai)'))
         
@@ -458,10 +471,12 @@ def fetch_price(symbol):
     cached = get_cached('price_' + symbol)
     if cached:
         return cached
+        
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-    for source in ['VCI', 'TCBS']:
+    
+    for source in['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
             df = Vnstock().stock(symbol=symbol, source=source).quote.history(
@@ -469,17 +484,21 @@ def fetch_price(symbol):
             )
             if df is None or df.empty:
                 continue
+                
             cc = find_col(df, ['close', 'closeprice', 'close_price'])
             if cc is None:
                 nums = df.select_dtypes(include='number').columns
                 cc = nums[-1] if len(nums) > 0 else None
-                if cc is None:
-                    continue
+                
+            if cc is None:
+                continue
+                
             close = float(df.iloc[-1][cc])
             if 0 < close < 1000:
                 close *= 1000
             if close <= 0:
                 continue
+                
             chg = 0
             if len(df) >= 2:
                 prev = float(df.iloc[-2][cc])
@@ -487,46 +506,55 @@ def fetch_price(symbol):
                     prev *= 1000
                 if prev > 0:
                     chg = round((close - prev) / prev * 100, 2)
+                    
             result = {'symbol': symbol, 'price': round(close, 0), 'change_pct': chg, 'source': source}
             set_cache('price_' + symbol, result)
             return result
         except Exception as e:
             logger.warning(f"{symbol}/{source}: {e}")
-    return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Khong tai duoc gia'}
+            
+    return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'source': 'error', 'error': 'Khong the lay gia'}
 
 def fetch_analysis(symbol, price_override=None):
     cache_key = 'analysis_' + symbol + '_' + (str(price_override) if price_override else 'live')
-    # Chi dung cache neu vol_ma20 > 0 (tranh cache cu bi loi)
+    # Dung cache tot (vol_ma20 > 0)
     if not price_override:
         cached = get_cached(cache_key)
         if cached and cached.get('vol_ma20', 0) > 0:
+            logger.info(f"{symbol}: served from cache vol_ma20={cached['vol_ma20']:.0f}")
             return cached
             
     # Compute truc tiep
+    logger.info(f"{symbol}: computing directly...")
     df, source = load_history(symbol, days=200)
     if df is None:
+        logger.error(f"{symbol}: load_history returned None")
         return {'symbol': symbol, 'error': 'Khong tai duoc du lieu'}
         
+    logger.info(f"{symbol}: df rows={len(df)} cols={list(df.columns)}")
     try:
         result = compute_indicators(df, price_override)
     except Exception as e:
         logger.error(f"compute {symbol}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {'symbol': symbol, 'error': str(e)}
         
     if result is None:
+        logger.error(f"{symbol}: compute_indicators returned None")
         return {'symbol': symbol, 'error': 'Khong tinh duoc chi bao'}
         
+    logger.info(f"{symbol}: computed vol_today={result.get('vol_today',0):.0f} vol_ma20={result.get('vol_ma20',0):.0f}")
     result['symbol'] = symbol
     result['source'] = source
     
-    # Chi luu cache khi volume hop le
     if result.get('vol_ma20', 0) > 0:
         set_cache(cache_key, result)
     return result
 
 @app.route('/')
 def index():
-    return jsonify({'status': 'ok', 'message': 'VN Trader API v4', 'weights': 'VOL35 RSI+DIV20'})
+    return jsonify({'status': 'ok', 'message': 'VN Trader API v4', 'weights': 'VOL35 RSI+DIV25 MA20 MACD...'})
 
 @app.route('/api/price/<symbol>')
 def api_price(symbol):
@@ -557,7 +585,6 @@ WATCHLIST =[
     'HPG', 'HSG', 'NKG',
     'SSI', 'VND', 'HCM',
 ]
-
 _bg_running = False
 
 def start_background_cache():
@@ -602,7 +629,7 @@ def api_signals():
             results.append(cached)
             
     if len(results) < 3:
-        for sym in ['VCB', 'HPG', 'FPT']:
+        for sym in['VCB', 'HPG', 'FPT']:
             if any(r.get('symbol') == sym for r in results):
                 continue
             try:
@@ -630,9 +657,11 @@ def api_clearcache():
 def api_debug(symbol):
     sym = symbol.upper()
     result = {'symbol': sym, 'attempts':[]}
+    
     from datetime import datetime, timedelta
     end = datetime.now().strftime('%Y-%m-%d')
     start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    
     for source in ['VCI', 'TCBS']:
         try:
             from vnstock import Vnstock
