@@ -16,11 +16,10 @@ def send(text, chat_id=None):
     cid = chat_id or CHAT_ID
     if not TOKEN or not cid:
         return False
-        
     MAX = 3800
     chunks = []
     if len(text) <= MAX:
-        chunks = [text]
+        chunks =[text]
     else:
         lines = text.split('\n')
         current = ''
@@ -32,7 +31,6 @@ def send(text, chat_id=None):
                 current = current + '\n' + line if current else line
         if current:
             chunks.append(current)
-            
     ok = True
     for chunk in chunks:
         try:
@@ -80,13 +78,24 @@ def sig_emoji(typ):
         return '&#x1F4C9;'
     return '&#x27A1;'
 
+def escape_html(txt):
+    # Dam bao khong co HTML tag nao lam loi Telegram HTML mode
+    return (str(txt)
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('&amp;lt;', '&lt;') # Tranh double-escape
+        .replace('&amp;gt;', '&gt;')
+        .replace('&amp;amp;', '&amp;')
+    )
+
 def get_group(signals, key):
     lines =[]
     for item in signals:
         if isinstance(item, (list, tuple)) and len(item) == 3:
             g, t, txt = item
             if g == key:
-                lines.append(' ' + sig_emoji(t) + ' ' + txt)
+                lines.append(' ' + sig_emoji(t) + ' ' + escape_html(txt))
     return '\n'.join(lines) if lines else ''
 
 def build_action_lines(data):
@@ -96,10 +105,16 @@ def build_action_lines(data):
     tp = data.get('take_profit', 0)
     sl_lbl = data.get('sl_label', '')
     tp_lbl = data.get('tp_label', '')
-    
     if action == 'MUA':
+        sups = data.get('supports',[])
+        if sups:
+            buy_zone = sups[0]['price']
+            buy_zone_line = ' Cho gia ve : ' + f'{buy_zone:,.0f}' + 'd (vung HT - an toan hon)\n'
+        else:
+            buy_zone_line = ''
         return (
-            ' Vao lenh : ' + f'{price:,.0f}' + 'd\n'
+            ' Mua ngay : ' + f'{price:,.0f}' + 'd (neu tin hieu du manh)\n'
+            + buy_zone_line
             + ' Stop Loss : ' + f'{sl:,.0f}' + 'd (' + sl_lbl + ')\n'
             + ' Chot loi : ' + f'{tp:,.0f}' + 'd (' + tp_lbl + ')\n'
             + ' R:R = 1:2\n\n'
@@ -124,13 +139,14 @@ def build_analysis_msg(data, prefix='Phan tich'):
     ae = action_emoji(action)
     sigs = data.get('signals',[])
     ichi = data.get('ichimoku', {})
-    sups = data.get('supports', [])
+    sups = data.get('supports',[])
     ress = data.get('resistances',[])
     div = data.get('rsi_divergence', {})
     vr = data.get('vol_ratio', 1.0)
     tio = data.get('three_in_one', False)
     gc = data.get('golden_cross', False)
     dc = data.get('death_cross', False)
+    
     vol_bar = '&#x1F525;' if vr >= 1.5 else ('&#x2B06;' if vr >= 1.0 else '&#x2B07;')
     ct = ichi.get('cloud_top', 0)
     cb = ichi.get('cloud_bottom', 0)
@@ -153,7 +169,7 @@ def build_analysis_msg(data, prefix='Phan tich'):
         
     div_line = ''
     if div.get('type') != 'none' and div.get('message'):
-        div_line = '\n\n<b>PHAN KY RSI:</b>\n ' + div['message']
+        div_line = '\n\n<b>PHAN KY RSI:</b>\n ' + escape_html(div['message'])
         
     tio_line = ''
     if tio:
@@ -171,17 +187,21 @@ def build_analysis_msg(data, prefix='Phan tich'):
     msg = (
         '<b>' + prefix + ' ' + sym + '</b>\n'
         + '=' * 30 + '\n'
-        + 'Gia: <b>' + f'{price:,.0f}' + 'd</b> Diem: <b>' + str(score) + '/100</b> ' + ae + tio_line + div_line + '\n\n'
+        + 'Gia: <b>' + f'{price:,.0f}' + 'd</b> Diem: <b>' + str(score) + '/100</b> ' + ae + tio_line + div_line + cross_line + '\n\n'
         + '<b>1. RSI(14)</b>\n' + (rsi_lines or ' -&gt; Trung tinh') + '\n\n'
         + '<b>2. RSI Phan ky</b>\n' + (div_lines or ' -&gt; Khong phat hien phan ky') + '\n\n'
         + '<b>3. MACD</b>\n'
-        + ' Line:' + f'{data.get("macd", 0):+.0f}' + ' Sig:' + f'{data.get("macd_signal", 0):+.0f}' + '\n' + (macd_lines or '') + '\n\n'
+        + ' Line:' + f'{data.get("macd", 0):+.0f}' + ' Sig:' + f'{data.get("macd_signal", 0):+.0f}' + '\n'
+        + (macd_lines or '') + '\n\n'
         + '<b>4. MA20 & MA50</b>\n'
-        + ' MA20:' + f'{data.get("ma20", 0):,.0f}' + ' MA50:' + f'{data.get("ma50", 0):,.0f}' + '\n' + (ma_lines or '') + '\n\n'
+        + ' MA20:' + f'{data.get("ma20", 0):,.0f}' + ' MA50:' + f'{data.get("ma50", 0):,.0f}' + '\n'
+        + (ma_lines or '') + '\n\n'
         + '<b>5. Bollinger Bands</b>\n'
-        + ' BB:' + f'{data.get("bb_lower", 0):,.0f}' + '-' + f'{data.get("bb_upper", 0):,.0f}' + '\n' + (bb_lines or '') + '\n\n'
+        + ' BB:' + f'{data.get("bb_lower", 0):,.0f}' + '-' + f'{data.get("bb_upper", 0):,.0f}' + '\n'
+        + (bb_lines or '') + '\n\n'
         + '<b>6. Volume (Dong tien)</b>\n'
-        + ' Hom nay:' + fmt_vol(data.get('vol_today', 0)) + ' TB20:' + fmt_vol(data.get('vol_tb20', 0)) + '\n' + (vol_lines or '') + '\n\n'
+        + ' Hom nay:' + fmt_vol(data.get('vol_today', 0)) + ' TB20:' + fmt_vol(data.get('vol_avg_20', 0)) + '\n'
+        + (vol_lines or '') + '\n\n'
         + '<b>7. Ichimoku</b>\n'
         + ' Tenkan:' + f'{ichi.get("tenkan", 0):,.0f}' + ' Kijun:' + f'{ichi.get("kijun", 0):,.0f}' + '\n'
         + ' May:' + f'{cb:,.0f}' + '-' + f'{ct:,.0f}' + ' ' + ichi_s + '\n'
@@ -256,9 +276,8 @@ def handle_signals(chat_id):
     send('Dang quet tin hieu HPG, FPT, VCB...', chat_id)
     data = call_api('/api/signals')
     if not data:
-        send('Khong lay duoc tin hieu. Thu lai sau hoac dung:\n/analyze HPG\n/analyze FPT\n/analyze VCB', chat_id)
+        send('Khong lay duoc tin hieu. Thu lai sau hoac dung:\n/analyze HPG\n/analyze FPT', chat_id)
         return
-        
     msg = '<b>Top Tin Hieu Hom Nay</b>\n\n'
     for item in data:
         action = item.get('action', '')
@@ -279,9 +298,9 @@ def handle_signals(chat_id):
         else:
             is_ = 'Trong may'
             
-        sups = item.get('supports', [])
-        ress = item.get('resistances',[])
-        div_txt = '\n PHAN KY: ' + div['message'] if div.get('type') != 'none' and div.get('message') else ''
+        sups = item.get('supports',[])
+        ress = item.get('resistances', [])
+        div_txt = '\n PHAN KY: ' + escape_html(div['message']) if div.get('type') != 'none' else ''
         tio_txt = '\n HOI TU 3-TRONG-1!' if tio else ''
         
         msg += (
@@ -290,7 +309,7 @@ def handle_signals(chat_id):
             + ' ' + vb + ' Vol: ' + f'{vr:.1f}' + 'x ' + is_ + '\n'
             + (' HT: ' + f'{sups[0]["price"]:,.0f}' if sups else '')
             + (' KC: ' + f'{ress[0]["price"]:,.0f}' if ress else '') + '\n'
-            + ' SL: ' + f'{item.get("stop_loss", 0):,.0f}' + ' TP: ' + f'{item.get("take_profit", 0):,.0f}'
+            + ' SL: ' + f'{item.get("stop_loss", 0):,.0f}' + ' TP: ' + f'{item.get("take_profit", 0):,.0f}' + '\n'
             + div_txt + tio_txt + '\n\n'
         )
     msg += '<i>Khong phai tu van dau tu</i>'
@@ -306,7 +325,6 @@ def handle_market(chat_id):
             chg = val.get('change_pct', 0)
             arr = '+' if chg >= 0 else ''
             msg += '<b>' + val.get('name', key) + '</b>: ' + f'{p:,.2f}' + ' (' + arr + f'{chg:.2f}%)\n'
-            
     if msg == '<b>Chi so thi truong</b>\n\n':
         msg += 'Khong lay duoc du lieu.'
     send(msg, chat_id)
@@ -367,11 +385,11 @@ def poll_updates():
             time.sleep(5)
 
 # ── Cấu hình alert ──────────────────────────────────────────────────────────
-SCORE_STRONG_BUY = 72 # >= 72 -&gt; MUA manh
-SCORE_STRONG_SELL = 28 # <= 28 -&gt; BAN manh
+SCORE_STRONG_BUY = 72 # >= 72 -> MUA manh
+SCORE_STRONG_SELL = 28 # <= 28 -> BAN manh
 ALERT_INTERVAL = 30 # phut
 TRADING_HOURS = ((9, 0), (15, 0)) # 9:00 - 15:00 gio VN
-_last_alerts = {} # sym -&gt; (score, timestamp) - tranh gui lap
+_last_alerts = {} # sym -> (score, timestamp) - tranh gui lap
 
 def is_trading_hours():
     now = datetime.now()
@@ -403,12 +421,15 @@ def format_alert(item):
     vol_line = ''
     if vr >= 1.5:
         vol_line = '\n &#x1F4B0; DONG TIEN LON: Vol ' + f'{vr:.1f}' + 'x TB20'
+        
     div_line = ''
     if div.get('type') != 'none' and div.get('message'):
         div_line = '\n &#x1F514; PHAN KY RSI phat hien!'
+        
     tio_line = ''
     if tio:
         tio_line = '\n &#x2705; HOI TU 3-TRONG-1 du dieu kien!'
+        
     sr_line = ''
     if sups and score >= SCORE_STRONG_BUY:
         sr_line = '\n HT: ' + f'{sups[0]["price"]:,.0f}' + 'd'
@@ -454,7 +475,7 @@ def auto_alert_scanner():
                                 continue
                         _last_alerts[sym] = (score, time.time())
                         send(format_alert(item), CHAT_ID)
-                time.sleep(2)
+                        time.sleep(2)
             # 8:45 sang - bao cao dau ngay
             if now.weekday() < 5 and now.hour == 8 and now.minute == 45:
                 send('<b>Bao cao 8:45 - Chuan bi phien giao dich</b>', CHAT_ID)
