@@ -14,7 +14,7 @@ TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 API_URL = os.environ.get('API_BASE_URL', 'http://localhost:8080')
 
-# ── Watchlist chính thức — 21 mã đạt chuẩn backtest 7 năm ───────────────────
+# ── Watchlist chính thức — 20 mã đạt chuẩn backtest 7 năm ───────────────────
 # tier: 1=Vàng / 2=Bạc / 3=Đồng / 0=Theo dõi
 # pf/wr: kết quả backtest thực tế | score_min: ngưỡng MUA tối ưu
 WATCHLIST_META = {
@@ -41,10 +41,7 @@ WATCHLIST_META = {
     'NVL': {'tier': 3, 'pf': 1.36, 'wr': 52.2, 'score_min': 70, 'sl': 7, 'tp': 14, 'group': 'BDS'},
     'VCB': {'tier': 3, 'pf': 1.32, 'wr': 58.6, 'score_min': 80, 'sl': 5, 'tp':  9, 'group': 'Ngan hang'},
     'PVS': {'tier': 3, 'pf': 1.28, 'wr': 53.8, 'score_min': 70, 'sl': 7, 'tp': 14, 'group': 'Dau khi'},
-    # ── Theo dõi ────────────────────────────────────────────────────────────
-    'POW': {'tier': 0, 'pf': 1.34, 'wr': 43.4, 'score_min': 80, 'sl': 7, 'tp': 14, 'group': 'Dien'},
-    'NT2': {'tier': 0, 'pf': 1.11, 'wr': 52.9, 'score_min': 80, 'sl': 5, 'tp':  9, 'group': 'Dien'},
-    'FRT': {'tier': 0, 'pf': 1.32, 'wr': 48.9, 'score_min': 75, 'sl': 5, 'tp':  9, 'group': 'Ban le'},
+  
 }
 
 TIER_ICON = {1: '&#x1F947;', 2: '&#x1F948;', 3: '&#x1F949;', 0: '&#x1F7E1;'}
