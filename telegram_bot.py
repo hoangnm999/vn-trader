@@ -661,7 +661,7 @@ def handle_signals(chat_id):
 
     now_str = datetime.now(VN_TZ).strftime('%d/%m %H:%M')
     msg = f'<b>&#x1F4CB; Tin Hieu Watchlist — {now_str}</b>\n'
-    msg += f'(21 ma chuan | Chi hien thi score >= nguong toi uu)\n\n'
+    msg += f'(20 ma chuan | Chi hien thi score >= nguong toi uu)\n\n'
     buy_symbols = []
 
     if not wl_signals:
