@@ -2359,7 +2359,7 @@ def auto_alert_scanner():
                 continue
 
             # ── Báo cáo 15:05 — tổng kết cuối phiên ─────────────────────────
-            if weekday < 5 and h == 15 and m == 5 and _last_scan_slot != (total_min):
+            if weekday < 5 and h == 17 and m == 02 and _last_scan_slot != (total_min):
                 _last_scan_slot = total_min
                 send('&#x1F514; <b>Tong ket phien — ' + now.strftime('%d/%m') + '</b>', CHAT_ID)
                 handle_signals(CHAT_ID)
