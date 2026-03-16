@@ -1,0 +1,8 @@
+flask
+flask-cors
+requests
+numpy
+pandas
+pytz
+vnstock
+psycopg2-binary
