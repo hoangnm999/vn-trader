@@ -2503,7 +2503,7 @@ def auto_alert_scanner():
                 continue
 
             # ── Báo cáo TEST 17:10 ───────────────────────────────────────────
-            if weekday < 5 and h == 17 and m == 10 and _last_scan_slot != (total_min + 7777):
+            if weekday < 5 and h == 17 and m == 37 and _last_scan_slot != (total_min + 7777):
                 _last_scan_slot = total_min + 7777
                 broadcast('&#x1F9EA; <b>[TEST] Bao cao 17:10 — ' + now.strftime('%d/%m') + '</b>')
                 broadcast_signals()
