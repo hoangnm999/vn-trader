@@ -2366,10 +2366,10 @@ def auto_alert_scanner():
                 time.sleep(60)
                 continue
 
-            # ── Báo cáo TEST 16:20 — xác nhận hệ thống hoạt động ────────────
-            if weekday < 5 and h == 16 and m == 20 and _last_scan_slot != (total_min + 9999):
+            # ── Báo cáo TEST 16:35 — xác nhận hệ thống hoạt động ────────────
+            if weekday < 5 and h == 16 and m == 35 and _last_scan_slot != (total_min + 9999):
                 _last_scan_slot = total_min + 9999
-                send('&#x1F9EA; <b>[TEST] Bao cao 16:20 — ' + now.strftime('%d/%m') + '</b>\n'
+                send('&#x1F9EA; <b>[TEST] Bao cao 16:35 — ' + now.strftime('%d/%m') + '</b>\n'
                      + 'He thong hoat dong binh thuong ✅\n'
                      + 'CHAT_ID nhan dung ✅\n'
                      + 'Dang gui /signals...', CHAT_ID)
