@@ -64,7 +64,7 @@ SYMBOL_CONFIG = {
     'HSG': {'sl': 0.07, 'tp': 0.14, 'min_score': 70},
     'KDH': {'sl': 0.07, 'tp': 0.14, 'min_score': 80},
     'PDR': {'sl': 0.07, 'tp': 0.14, 'min_score': 65},
-    'NVL': {'sl': 0.07, 'tp': 0.14, 'min_score': 70},
+    'NVL': {'sl': 0.07, 'tp': 0.14, 'min_score': 80},
     'PVS': {'sl': 0.07, 'tp': 0.14, 'min_score': 70},
     'POW': {'sl': 0.07, 'tp': 0.14, 'min_score': 80},
     'NT2': {'sl': 0.05, 'tp': 0.09, 'min_score': 80},
