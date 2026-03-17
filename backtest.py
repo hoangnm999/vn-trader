@@ -50,7 +50,7 @@ SYMBOL_CONFIG = {
     'sl': 0.05, 'tp': 0.09,
     'min_score': 80,
     'use_b_filter': True   # Ngoại lệ duy nhất trong watchlist
-}
+},
     'MBB': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'SSI': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'HCM': {'sl': 0.05, 'tp': 0.09, 'min_score': 75},
