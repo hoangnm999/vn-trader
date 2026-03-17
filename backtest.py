@@ -45,7 +45,7 @@ SYMBOL_CONFIG = {
     # Bộ A — Bluechip/Tăng trưởng (SL=5% TP=9%)
     'VCB': {'sl': 0.05, 'tp': 0.09, 'min_score': 80},
     'FPT': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
-    'BID': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
+    'BID': {'sl': 0.05, 'tp': 0.09, 'min_score': 80},
     'MBB': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'SSI': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'HCM': {'sl': 0.05, 'tp': 0.09, 'min_score': 75},
