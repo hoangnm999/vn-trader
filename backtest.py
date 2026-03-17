@@ -43,7 +43,7 @@ LOOKBACK_DAYS    = 2555    # 7 năm (7 x 365)
 # sl/tp là số dương: sl=0.05 = cắt lỗ -5%, tp=0.09 = chốt lời +9%
 SYMBOL_CONFIG = {
     # Bộ A — Bluechip/Tăng trưởng (SL=5% TP=9%)
-    'VCB': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
+    'VCB': {'sl': 0.05, 'tp': 0.09, 'min_score': 80},
     'FPT': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'BID': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
     'MBB': {'sl': 0.05, 'tp': 0.09, 'min_score': 70},
