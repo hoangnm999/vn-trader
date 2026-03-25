@@ -236,7 +236,7 @@ def run_shark_report(symbol, verbose=True, use_regime=False):
         print(f'  Foreign data: {"CO (%d phien)" % len(foreign_arr) if has_f else "KHONG CO — skip mode SF/ASF"}')
 
     # ── Baseline A ────────────────────────────────────────────────────────────
-    res_a = _run_mode(symbol, 'A')
+    res_a = _run_mode(symbol, 'A', vni_closes=_vni_closes_shared)
     st_a  = res_a['stats'] if res_a else {}
     wr_a  = st_a.get('win_rate', 0); pnl_a = st_a.get('avg_pnl', 0)
     pf_a  = st_a.get('profit_factor', 0); n_a = st_a.get('total', 0)
