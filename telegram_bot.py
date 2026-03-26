@@ -2638,6 +2638,7 @@ def handle_start(chat_id):
         '<b>Lenh:</b>\n'
         '/price VCB - Gia hien tai\n'
         '/analyze FPT - Phan tich day du 8 lop\n'
+        '/score FPT    - Tuong tu /analyze (alias)\n'
         '/whatif VCB 59000 - Neu VCB ve 59k thi sao?\n'
         '/check VCB 85000 - Kiem tra vi the mua tai 85k\n'
         '/bt MBB       — Backtest + WalkForward gop (~3 phut)\n'
@@ -3536,7 +3537,7 @@ def poll_updates():
 
                 elif cmd == '/price':
                     handle_price(parts[1].upper() if len(parts) > 1 else 'VCB', cid)
-                elif cmd == '/analyze':
+                elif cmd in ('/analyze', '/score'):
                     handle_analyze(parts[1].upper() if len(parts) > 1 else 'VCB', cid)
                 elif cmd == '/shark':
                     handle_shark(parts[1].upper() if len(parts) > 1 else 'DGC', cid)
