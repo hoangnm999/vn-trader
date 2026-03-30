@@ -186,6 +186,24 @@ def analyze_1h_warnings(symbol):
     if n < 3:
         return []
 
+    # ── Check: nến 1H cuối có phải hôm nay không? ────────────────────────────
+    try:
+        _tc1h = next((c for c in df.columns if c.lower() in
+                      ('time', 'date', 'datetime', 'trading_date')), None)
+        if _tc1h:
+            _last_ts = pd.to_datetime(df[_tc1h].iloc[-1], errors='coerce')
+            _now_vn  = __import__('datetime').datetime.now(_VN_TZ)
+            _today   = _now_vn.date()
+            _market_open = _now_vn.replace(hour=9, minute=0, second=0, microsecond=0)
+            # Nếu nến cuối không phải hôm nay → data cũ, skip
+            if pd.notna(_last_ts) and _last_ts.date() < _today:
+                return []
+            # Nếu chưa 9:15 hôm nay → thị trường chưa mở đủ 1 giờ, skip
+            if _now_vn < _market_open:
+                return []
+    except Exception:
+        pass
+
     # Lấy tối đa 10 nến 1H — bao gồm nến hiện tại (có thể chưa đóng)
     recent    = volumes[-10:] if n >= 10 else volumes
     prev_vols = recent[:-1]
@@ -1269,6 +1287,146 @@ def compute_indicators(df, price_override=None, symbol=''):
         sl_label    = _sl_label + ' neu da mua'
         tp_label    = f'+{int(_tp_pct/2*100)}% tham khao'
 
+
+    # ── Sprint 4: ADX, BB Squeeze, Vol Compression, OBV, ROC, MA50 Slope ────────
+    try:
+        # ADX (Average Directional Index) — Trend Strength
+        _adx_score = 0
+        _adx_val   = None
+        _squeeze_flag = False
+        _vol_compress = False
+        _obv_div      = False
+        _roc_val      = None
+        _ma50_slope   = None
+
+        if len(closes) >= 28:
+            # ── ADX ────────────────────────────────────────────────────────────
+            _hi  = highs[-28:]
+            _lo  = lows[-28:]
+            _cl  = closes[-28:]
+            _tr  = np.maximum(np.maximum(_hi[1:] - _lo[1:],
+                               np.abs(_hi[1:] - _cl[:-1])),
+                               np.abs(_lo[1:] - _cl[:-1]))
+            _dm_p = np.where((_hi[1:]-_hi[:-1]) > (_lo[:-1]-_lo[1:]),
+                              np.maximum(_hi[1:]-_hi[:-1], 0), 0.0)
+            _dm_n = np.where((_lo[:-1]-_lo[1:]) > (_hi[1:]-_hi[:-1]),
+                              np.maximum(_lo[:-1]-_lo[1:], 0), 0.0)
+            _p = 14
+            _atr14 = np.convolve(_tr,    np.ones(_p)/_p, mode='valid')[-1]
+            _dip14 = np.convolve(_dm_p,  np.ones(_p)/_p, mode='valid')[-1]
+            _din14 = np.convolve(_dm_n,  np.ones(_p)/_p, mode='valid')[-1]
+            _di_p  = (_dip14 / _atr14 * 100) if _atr14 > 0 else 0
+            _di_n  = (_din14 / _atr14 * 100) if _atr14 > 0 else 0
+            _dx    = abs(_di_p - _di_n) / (_di_p + _di_n) * 100 if (_di_p + _di_n) > 0 else 0
+            _adx_val = round(_dx, 1)
+            # ADX > 25 = trending mạnh; > 35 = rất mạnh; < 20 = ranging
+            if _adx_val >= 35:
+                _adx_score = +5 if price > ma50 else -5   # strong trend bonus/penalty
+            elif _adx_val >= 25:
+                _adx_score = +3 if price > ma50 else -3
+            # ADX < 20 không cộng/trừ — không có trend rõ
+            score = max(0, min(100, score + _adx_score))
+            if   score >= MIN_SCORE_BUY:  action = 'MUA'
+            elif score <= MAX_SCORE_SELL: action = 'BAN'
+
+        # ATR(14) — Average True Range (dùng cho SL dynamic)
+        _atr_val = None
+        if len(closes) >= 15:
+            _tr2 = np.maximum(np.maximum(highs[-15:][1:] - lows[-15:][1:],
+                               np.abs(highs[-15:][1:] - closes[-16:-1])),
+                               np.abs(lows[-15:][1:] - closes[-16:-1]))
+            _atr_val = round(float(np.mean(_tr2)), 0)
+
+        # ── BB Squeeze ─────────────────────────────────────────────────────────
+        if len(closes) >= 40:
+            _bb_widths = []
+            for _k in range(20, len(closes)):
+                _w = float(np.std(closes[_k-20:_k])) * 2 * 2
+                _m = float(np.mean(closes[_k-20:_k]))
+                _bb_widths.append(_w / _m * 100 if _m > 0 else 0)
+            _bw_now  = _bb_widths[-1]
+            _bw_pct20 = float(np.percentile(_bb_widths, 20))
+            _squeeze_flag = _bw_now < _bw_pct20
+            if _squeeze_flag:
+                score = max(0, min(100, score + 4))   # squeeze = potential breakout
+                if   score >= MIN_SCORE_BUY:  action = 'MUA'
+                elif score <= MAX_SCORE_SELL: action = 'BAN'
+
+        # ── Vol Compression ────────────────────────────────────────────────────
+        if len(volumes) >= 15 and vol_ma20 > 0:
+            _vol_slope_window = volumes[-10:]
+            _vol_nonzero = _vol_slope_window[_vol_slope_window > 0]
+            if len(_vol_nonzero) >= 5:
+                _xs = np.arange(len(_vol_nonzero), dtype=float)
+                _ys = _vol_nonzero / vol_ma20   # normalize
+                _slope = np.polyfit(_xs, _ys, 1)[0]
+                _vol_compress = bool(_slope < -0.02)   # declining vol = accumulation
+
+        # ── OBV (On Balance Volume) ─────────────────────────────────────────────
+        _obv_score = 0
+        if len(closes) >= 20 and len(volumes) >= 20:
+            _obv = np.zeros(20)
+            for _k in range(1, 20):
+                _sign = 1 if closes[-20+_k] > closes[-20+_k-1] else (-1 if closes[-20+_k] < closes[-20+_k-1] else 0)
+                _obv[_k] = _obv[_k-1] + _sign * volumes[-20+_k]
+            # OBV trend: compare first half vs second half
+            _obv_first = float(np.mean(_obv[:10]))
+            _obv_last  = float(np.mean(_obv[10:]))
+            _price_first = float(np.mean(closes[-20:-10]))
+            _price_last  = float(np.mean(closes[-10:]))
+            # Divergence: price down + OBV up = accumulation (bullish div)
+            _obv_div = bool(_price_last < _price_first and _obv_last > _obv_first)
+            if _obv_div:
+                _obv_score = +5
+                score = max(0, min(100, score + _obv_score))
+                if   score >= MIN_SCORE_BUY:  action = 'MUA'
+                elif score <= MAX_SCORE_SELL: action = 'BAN'
+            elif _price_last > _price_first and _obv_last < _obv_first:
+                # Bearish divergence: price up + OBV down
+                _obv_score = -4
+                score = max(0, min(100, score + _obv_score))
+                if   score >= MIN_SCORE_BUY:  action = 'MUA'
+                elif score <= MAX_SCORE_SELL: action = 'BAN'
+
+        # ── ROC (Rate of Change) ────────────────────────────────────────────────
+        _roc_score = 0
+        if len(closes) >= 11:
+            _roc_val = round((closes[-1] / closes[-11] - 1) * 100, 2)
+            if _roc_val > 8:    _roc_score = +5
+            elif _roc_val > 3:  _roc_score = +3
+            elif _roc_val < -8: _roc_score = -4
+            elif _roc_val < -3: _roc_score = -2
+            if _roc_score != 0:
+                score = max(0, min(100, score + _roc_score))
+                if   score >= MIN_SCORE_BUY:  action = 'MUA'
+                elif score <= MAX_SCORE_SELL: action = 'BAN'
+
+        # ── MA50 Slope ─────────────────────────────────────────────────────────
+        _ma50s_score = 0
+        if len(closes) >= 60:
+            _ma50_now  = float(np.mean(closes[-50:]))
+            _ma50_prev = float(np.mean(closes[-60:-10]))
+            _ma50_slope = round((_ma50_now / _ma50_prev - 1) * 100, 2) if _ma50_prev > 0 else 0
+            if _ma50_slope > 1.5:    _ma50s_score = +4   # MA50 đang tăng mạnh
+            elif _ma50_slope > 0.5:  _ma50s_score = +2
+            elif _ma50_slope < -1.5: _ma50s_score = -3   # MA50 đang giảm mạnh
+            elif _ma50_slope < -0.5: _ma50s_score = -1
+            if _ma50s_score != 0:
+                score = max(0, min(100, score + _ma50s_score))
+                if   score >= MIN_SCORE_BUY:  action = 'MUA'
+                elif score <= MAX_SCORE_SELL: action = 'BAN'
+
+    except Exception as _e4:
+        _adx_val = None
+        _atr_val = None
+        _squeeze_flag = False
+        _vol_compress = False
+        _obv_div = False
+        _roc_val = None
+        _ma50_slope = None
+
+    # ── Sprint 4 END ──────────────────────────────────────────────────────────
+
     # ── Relative Strength vs VNINDEX + 52-week Breakout ─────────────────────
     # Cache RS 1 giờ để không gọi VNINDEX API mỗi lần
     rs_data  = {}
@@ -1463,7 +1621,14 @@ def compute_indicators(df, price_override=None, symbol=''):
         'regime_note': regime_note,
         'regime_exempt': not _sym_use_regime,
         'vwap_info': vwap_info,
-        'sector_rs': sector_rs,
+        'sector_rs':   sector_rs,
+        'adx':         _adx_val   if '_adx_val'   in dir() else None,
+        'atr':         _atr_val   if '_atr_val'   in dir() else None,
+        'squeeze':     _squeeze_flag if '_squeeze_flag' in dir() else False,
+        'vol_compress':_vol_compress if '_vol_compress' in dir() else False,
+        'obv_div':     _obv_div   if '_obv_div'   in dir() else False,
+        'roc':         _roc_val   if '_roc_val'   in dir() else None,
+        'ma50_slope':  _ma50_slope if '_ma50_slope' in dir() else None,
         'signals': signals,
         'three_in_one': bool(three_in_one),
         'entry': round(price, 0),
