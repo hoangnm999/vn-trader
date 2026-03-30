@@ -895,6 +895,69 @@ def _fmt_regime_compare(result_no, result_yes):
     return out
 
 
+
+def _fmt_sprint4(data):
+    """Hien thi Sprint 4 indicators: ADX, BB Squeeze, OBV, ROC."""
+    NL = chr(10)
+    out = ''
+
+    adx    = data.get('adx')
+    atr    = data.get('atr')
+    sq     = data.get('squeeze', False)
+    vc     = data.get('vol_compress', False)
+    obv_d  = data.get('obv_div', False)
+    roc    = data.get('roc')
+    ms     = data.get('ma50_slope')
+
+    lines = []
+
+    # ADX
+    if adx is not None:
+        if adx >= 35:
+            lines.append(f'ADX={adx:.0f} — Xu huong MANH')
+        elif adx >= 25:
+            lines.append(f'ADX={adx:.0f} — Co xu huong')
+        else:
+            lines.append(f'ADX={adx:.0f} — Thi truong sideway')
+
+    # BB Squeeze + Vol Compression combo
+    if sq and vc:
+        lines.append('&#x26A1; BB Squeeze + Vol tich luy — Breakout sap xay ra')
+    elif sq:
+        lines.append('&#x1F4A1; BB Squeeze — Bien dong sap no')
+    elif vc:
+        lines.append('&#x1F4C9; Vol dang tich luy (gom hang am tham)')
+
+    # OBV Divergence
+    if obv_d:
+        lines.append('&#x1F4C8; OBV tang trong khi gia di ngang — Smart money tich luy')
+
+    # ROC
+    if roc is not None:
+        if roc > 8:
+            lines.append(f'ROC10={roc:+.1f}% — Momentum bung no')
+        elif roc > 3:
+            lines.append(f'ROC10={roc:+.1f}% — Momentum tang')
+        elif roc < -8:
+            lines.append(f'ROC10={roc:+.1f}% — Momentum giam manh')
+
+    # MA50 Slope
+    if ms is not None and abs(ms) > 0.5:
+        arrow = '&#x2197;' if ms > 0 else '&#x2198;'
+        lines.append(f'MA50 slope={ms:+.1f}% {arrow} {"(tang toc)" if ms > 0 else "(cham lai)"}')
+
+    # ATR hint (for SL)
+    if atr is not None:
+        entry = data.get('entry', 0)
+        sl_atr = round(atr * 2)
+        sl_pct = round(sl_atr / entry * 100, 1) if entry > 0 else 0
+        lines.append(f'ATR(14)={atr:,.0f}d | SL dong={sl_atr:,.0f}d ({sl_pct:.1f}%)')
+
+    if not lines:
+        return ''
+    return NL + '&#x1F4CA; <b>Sprint4:</b> ' + (' | '.join(lines[:3]))
+
+
 def _fmt_sector_rs(data):
     """Hien thi Intra-Sector RS trong /score."""
     sr = data.get('sector_rs', {})
@@ -1371,7 +1434,7 @@ def build_analysis_msg(data, prefix='Phan tich', b_ctx=None):
             + ' ' + ae + tio_line + div_line + ma10_cross_line
             + (_fmt_shark_inline(data.get('shark_score', 0)) if data.get('shark_score', 0) >= 40 else '')
             + (_fmt_rs_inline(data) if data.get('rs_20d') is not None else '')
-            + _fmt_regime_inline(data) + _fmt_vwap(data) + _fmt_sector_rs(data)
+            + _fmt_regime_inline(data) + _fmt_vwap(data) + _fmt_sector_rs(data) + _fmt_sprint4(data)
             + '\n\n'
             + '<b>1. RSI(14)</b>\n' + (rsi_lines or ' -&gt; Trung tinh') + '\n\n'
             + '<b>2. RSI Phan ky</b>\n' + (div_lines or ' -&gt; Khong phat hien phan ky') + '\n\n'
@@ -2923,7 +2986,22 @@ def handle_signals(chat_id):
     skipped     = []  # Mã watchlist có tín hiệu nhưng score chưa đủ
 
     # Index data từ /api/signals theo symbol
+    # api_signals giờ trả về {signals:[], breadth:{}} hoặc list cũ
+    _breadth_data = {}
+    if isinstance(data, dict) and 'signals' in data:
+        _breadth_data = data.get('breadth', {})
+        data = data.get('signals', [])
     data_by_sym = {d.get('symbol', ''): d for d in (data or [])}
+
+    # ── Market Breadth display ───────────────────────────────────────────────
+    if _breadth_data:
+        _bc = _breadth_data
+        _bl = _bc.get('label', '')
+        _bl_icon = '&#x1F7E2;' if _bl == 'BULLISH' else ('&#x1F534;' if _bl == 'BEARISH' else '&#x1F7E1;')
+        _macro_prefix += (
+            f'{_bl_icon} <b>Breadth {_bc.get("buy_pct",0):.0f}%</b> '
+            f'({_bc.get("buy",0)}MUA/{_bc.get("sell",0)}BAN/{_bc.get("watch",0)}THEO) — {_bl}\n'
+        )
 
     # Đảm bảo tất cả mã Tier 1 đều được xét dù cache có hay không
     for sym, meta in WATCHLIST_META.items():

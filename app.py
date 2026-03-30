@@ -2790,8 +2790,26 @@ def api_signals():
                 pass
 
     results.sort(key=lambda x: abs(x.get('score', 50) - 50), reverse=True)
-    # Trả toàn bộ watchlist (không cap 3) để volscan và dashboard dùng đủ data
-    return jsonify(results)
+
+    # ── Market Breadth ────────────────────────────────────────────────────────
+    n_total   = len(results)
+    n_buy     = sum(1 for r in results if r.get('action') == 'MUA')
+    n_sell    = sum(1 for r in results if r.get('action') == 'BAN')
+    n_watch   = n_total - n_buy - n_sell
+    n_above50 = sum(1 for r in results if r.get('score', 0) >= 50)
+    breadth   = round(n_buy / n_total * 100) if n_total > 0 else 0
+    above50pct= round(n_above50 / n_total * 100) if n_total > 0 else 0
+
+    # Trả toàn bộ watchlist + breadth data
+    return jsonify({
+        'signals': results,
+        'breadth': {
+            'total': n_total, 'buy': n_buy, 'sell': n_sell, 'watch': n_watch,
+            'buy_pct': breadth, 'above50_pct': above50pct,
+            'label': ('BULLISH' if breadth >= 60 else
+                      'BEARISH' if breadth <= 25 else 'NEUTRAL'),
+        }
+    })
 
 
 @app.route('/health')
