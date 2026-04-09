@@ -6,3 +6,4 @@ pandas
 pytz
 vnstock
 psycopg2-binary
+scipy>=1.11.0
