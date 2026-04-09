@@ -64,7 +64,7 @@ DEFAULT_SYMBOLS = [
 
 # Cập nhật sau khi có kết quả /mlbtv2 all
 # Ví dụ: V2_FAIL_SYMBOLS = ['NKG', 'HPG', 'DGW']
-V2_FAIL_SYMBOLS = []   # ← điền vào sau khi có kết quả P2
+V2_FAIL_SYMBOLS = ['NKG', 'FRT', 'PNJ']   # ← điền vào sau khi có kết quả P2
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA FETCHER — vnstock
