@@ -3415,20 +3415,28 @@ def _handle_mlbtv2_all(chat_id, custom_sl=None, custom_tp=None,
         'PC1',   # PCC1 — xây lắp điện, commodity cycle
     ]
 
-    # Sector mapping đầy đủ — mã không có sector → 'broker' (logic v1)
+    # Sector mapping — chỉ map các mã CÓ pattern sector rõ ràng
+    # QUAN TRỌNG: mã không có trong SECTOR_MODE_MAP gốc của backtest.py
+    # → để 'broker' (default) để nhất quán với /mlbtv2 <SYM> per-symbol
+    # Chỉ override cho các mã commodity/retail thực sự rõ ràng
     SECTOR_MAP_ALL = {
-        # commodity
-        'HPG':'commodity','PVD':'commodity','GAS':'commodity',
-        'PLX':'commodity','DPM':'commodity','DCM':'commodity',
-        'PXS':'commodity','PVS':'commodity','GVR':'commodity',
-        'GMD':'commodity','PVT':'commodity','REE':'commodity',
+        # commodity — đã confirmed trong SECTOR_MODE_MAP gốc
+        'HPG':'commodity','PVD':'commodity',
+        # commodity — sector rõ ràng (dầu khí, xăng dầu, vận tải dầu)
+        'GAS':'commodity','PLX':'commodity',
+        'PXS':'commodity','PVS':'commodity',
+        'GMD':'commodity','PVT':'commodity',
         'BCM':'commodity','EVF':'commodity','PC1':'commodity',
+        # commodity gợi ý mới
         'DHC':'commodity',
-        # retail/consumer
+        # retail — rõ ràng consumer
         'PNJ':'retail','VNM':'retail','VHC':'retail',
         'ANV':'retail','FMC':'retail','MSN':'retail','KDC':'retail',
-        # broker/bank/default → 'broker' tự động
-        # VPB STB ACB TCB EIB NAB VIB MSB BVB BVH PVI PGB TPB
+        # KHÔNG map: DCM, DPM, GVR, REE
+        # DCM/DPM: phân bón — trong SECTOR_MODE_MAP gốc không có → dùng broker
+        # GVR: cao su — không có trong SECTOR_MODE_MAP gốc → dùng broker
+        # REE: cơ điện — không có trong SECTOR_MODE_MAP gốc → dùng broker
+        # Broker/bank: VPB STB ACB TCB EIB NAB VIB MSB BVB BVH PVI PGB TPB → broker
     }
 
     V2_SYMS = V2_SYMS_DOT1_9 + V2_SYMS_DOT10 + V2_SYMS_DOT11 + V2_SYMS_NEW
@@ -3494,6 +3502,10 @@ def _handle_mlbtv2_all(chat_id, custom_sl=None, custom_tp=None,
             dec2s = f'{w2["decay_wr"]:+.0f}%'  if w2 else '-'
             vrd2  = w2['verdict'] if w2 else '?'
 
+            # Tính tổng lệnh OOS — n nhỏ → OOS WR không đáng tin
+            n_oos2_total = sum(w['oos_n'] for w in w2['windows']) if w2 else 0
+            n_oos_warn   = n_oos2_total < 15  # < 15 lệnh OOS tổng → cảnh báo
+
             # Yearly v2 — top 3 năm gần nhất
             yr_str = ''
             if r2:
@@ -3541,8 +3553,11 @@ def _handle_mlbtv2_all(chat_id, custom_sl=None, custom_tp=None,
                 verdict_icon = '&#x274C;'
                 verdict_txt  = 'KHÔNG CẢI THIỆN'
 
+            # Thêm cảnh báo n nhỏ vào verdict
+            n_warn_str = f' ⚠ n_OOS={n_oos2_total}L (nhỏ)' if n_oos_warn else f' (n_OOS={n_oos2_total}L)'
+
             return (
-                f'{verdict_icon} <b>{sym}</b> [{dot}/{sec}]  {verdict_txt}' + NL
+                f'{verdict_icon} <b>{sym}</b> [{dot}/{sec}]  {verdict_txt}{n_warn_str}' + NL
                 + f'  v1: {n1}L WR={wr1}% PF={pf1s} PnL={pnl1:+.2f}% | OOS={oos1s} decay={dec1s}' + NL
                 + f'  v2: {n2}L WR={wr2}% <b>PF={pf2s}</b> PnL={pnl2:+.2f}%'
                 + f' [{ci_lo}-{ci_hi}%] | <b>OOS={oos2s}</b> decay={dec2s} [{vrd2}]' + NL
@@ -3669,8 +3684,14 @@ def _handle_mlbtv2_all(chat_id, custom_sl=None, custom_tp=None,
                    f'{wr2:>5}% {oos2:>6} {vrd2:>8}  {icon} {tag}')
             summary_rows += row + NL
 
-            if oos2_abs:
+            # Chỉ đưa vào promising nếu n_oos đủ lớn (>= 15 lệnh OOS tổng)
+            n_oos2 = sum(w['oos_n'] for w in w2['windows']) if w2 else 0
+            if oos2_abs and n_oos2 >= 15:
                 promising_rows.append((sym, dot, sec, pf2s, wr2, oos2, vrd2, tag))
+            elif oos2_abs and n_oos2 < 15:
+                # OOS >= 50% nhưng n nhỏ → ghi chú trong row nhưng không vào promising
+                row = row.rstrip() + f'  ⚠n={n_oos2}L'
+                summary_rows = summary_rows[:-len(row.split(NL)[-1])-1] if row in summary_rows else summary_rows
 
         send(summary_header + summary_rows, chat_id)
 
