@@ -175,6 +175,12 @@ from config import (
     HOLD_DAYS_OVERRIDE, POSITION_SIZE_CAPS, SCORE_THRESHOLDS_PER_SYMBOL,
     get_hold_days, get_position_size_cap,
     SCORE_SKIP_BUCKETS, is_score_in_skip_bucket,
+    # ── SCB Signal System (S14) ────────────────────────────────────────────────
+    SCB_WATCHLIST, SCB_WATCHLIST_TIER_A, SCB_WATCHLIST_TIER_B,
+    SCB_SCORE_A_MIN, SCB_SCORE_B_MIN,
+    SCB_HARD_SKIP, SCB_WF_STATS, SCB_BT_STATS,
+    # ── ML Confirmed Watchlist ─────────────────────────────────────────────────
+    ML_CONFIRMED_WATCHLIST,
 )
 
 # ── SIGNALS_WATCHLIST — Score A ────────────────────────────────────────────────
@@ -512,7 +518,7 @@ def call_api(endpoint):
                 if '/analyze/' in endpoint or '/fairvalue/' in endpoint:
                     t = 55
                 elif '/signals' in endpoint:
-                    t = 180
+                    t = 90
                 elif '/foreign/' in endpoint:
                     t = 40   # shark_detector 5 sources × ~8s
                 else:
@@ -1263,12 +1269,18 @@ def handle_mlscan(mode, chat_id):
             logger.debug(f'mlscan {sym}: {e}')
             return sym, None
 
-    # max_workers=10: /api/analyze/ mất ~15-20s/mã do FA compute
-    # Song song 10 mã → tổng thời gian ~30-40s thay vì 4-6 phút tuần tự
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+    # max_workers=2: match _API_ANALYZE_SEM = Semaphore(2)
+    # Tránh deadlock khi 10 thread cùng chờ semaphore → timeout chồng timeout
+    # Progress ping mỗi 5 mã để user biết bot đang chạy
+    _done_count = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         futures = {ex.submit(_scan_one, s): s for s in sym_list}
         for fut in concurrent.futures.as_completed(futures):
             sym, r = fut.result()
+            _done_count += 1
+            # Progress ping mỗi 5 mã
+            if _done_count % 5 == 0 or _done_count == total:
+                send(f'⏳ Đang quét... {_done_count}/{total} mã', chat_id)
             if r is None:
                 results['error'].append(sym)
                 continue
@@ -1346,13 +1358,16 @@ def handle_mlscan(mode, chat_id):
         + '<i>✅ = Tier A backtest | 🟡 = Tier B backtest | /ml SYM để xem chi tiết</i>'
     )
 
-    send(
-        '&#x1F4CA; <b>ML Scan — ' + mode_label + '</b>' + NL
-        + '━' * 26 + NL
-        + (NL + '━' * 22 + NL).join(parts)
-        + footer,
-        chat_id
-    )
+    # Split message để tránh Telegram reject khi > 4096 ký tự
+    _header = '&#x1F4CA; <b>ML Scan — ' + mode_label + '</b>' + NL + '━' * 26
+    send(_header, chat_id)
+    for _part in parts:
+        # Mỗi section (STRONG / PASS / NEAR) gửi riêng
+        if len(_part) > 3800:
+            # Cắt nếu quá dài (hiếm khi xảy ra)
+            _part = _part[:3800] + NL + '<i>... (còn nữa, dùng /ml SYM để xem chi tiết)</i>'
+        send(_part, chat_id)
+    send(footer, chat_id)
 
 
 def format_momentum_signal(sym, ms, price, ml_tier=None, ml_note=None):
@@ -6843,7 +6858,7 @@ def handle_signals(chat_id):
                     f'&#x23F3; Cache đang khởi động ({_cache_ready}/{_cache_total} mã sẵn sàng).\n'
                     'Đang chờ 35 giây rồi thử lại tự động...', chat_id
                 )
-                _t.sleep(35)
+                _t.sleep(20)
                 data = call_api('/api/signals')
                 if not data:
                     send('&#x274C; Không lấy được tín hiệu. Thử lại sau 1-2 phút.', chat_id)
@@ -6911,8 +6926,32 @@ def handle_signals(chat_id):
     
             # Đảm bảo tất cả mã Tier 1 đều được xét dù cache có hay không
             _wl_list = list(WATCHLIST_META.items())
-            for _sym_idx, (sym, meta) in enumerate(_wl_list, 1):
-                send(f'⏳ [{_sym_idx}/{len(_wl_list)}] Đang xử lý <b>{sym}</b>...', chat_id)
+
+            # ── FIX PERFORMANCE: Pre-load B-filter data song song (2 workers) ──────
+            # Thay vì load tuần tự trong loop (10 mã × 4s = 40s),
+            # pre-load tất cả song song → ~8-10s tổng
+            import concurrent.futures as _cfu
+            import backtest as _bt_preload
+
+            def _preload_b(sym_):
+                try:
+                    df_, _ = _bt_preload.load_data(sym_, days=200)
+                    return sym_, df_
+                except Exception:
+                    return sym_, None
+
+            _wl_syms = [s for s, _ in _wl_list]
+            _df_cache = {}
+            try:
+                with _cfu.ThreadPoolExecutor(max_workers=2) as _pex:
+                    _pfuts = {_pex.submit(_preload_b, s): s for s in _wl_syms}
+                    for _pf in _cfu.as_completed(_pfuts):
+                        _ps, _pdf = _pf.result()
+                        _df_cache[_ps] = _pdf
+            except Exception:
+                pass  # nếu parallel fail, df_cache rỗng → loop dùng None
+
+            for sym, meta in _wl_list:
                 item = data_by_sym.get(sym)
                 if item is None:
                     # Không có trong cache — gọi trực tiếp
@@ -6920,29 +6959,24 @@ def handle_signals(chat_id):
                     if fallback and 'error' not in fallback:
                         item = fallback
                     else:
-                        send(f'⚠ {sym}: không lấy được data, bỏ qua.', chat_id)
+                        logger.warning(f'signals fallback {sym}: no data')
                         continue
                 score  = item.get('score', 0)
                 action = item.get('action', '')
                 item['symbol'] = sym  # đảm bảo có key symbol
-    
-                # ── Soft filter (B): điều chỉnh score theo đặc tính thị trường VN ──
+
+                # ── Soft filter (B): dùng df đã pre-load ─────────────────────────
                 b_penalty  = 0
                 b_warnings = []
                 try:
-                    import sys, os
-                    bot_dir = os.path.dirname(os.path.abspath(__file__))
-                    if bot_dir not in sys.path: sys.path.insert(0, bot_dir)
-                    mc = _mc
-                    import backtest as bt_mod, importlib
-                    df_b, _ = _load_data_retry(sym, chat_id, days=200, label=sym)
+                    mc    = _mc
+                    df_b  = _df_cache.get(sym)  # lấy từ cache, không load lại
                     if df_b is not None:
                         ctx_b = mc.build_market_context(df_b, sym,
                                     item.get('price', 0),
                                     item.get('vol_ratio', 1.0), score)
-                        # Dùng hàm chung calc_b_adjustment (cộng/trừ nhất quán)
                         _b_delta, _b_flags, _b_dets = _mc.calc_b_adjustment(ctx_b)
-                        b_penalty = -_b_delta  # âm = cộng điểm, dương = trừ điểm
+                        b_penalty = -_b_delta
                         b_warnings = [
                             ('+' if d['delta'] > 0 else '') + str(d['delta'])
                             + 'd ' + d['label']
@@ -6950,7 +6984,7 @@ def handle_signals(chat_id):
                         ]
                 except Exception:
                     pass
-    
+
                 score_adj = max(0, min(100, score - b_penalty))  # b_penalty âm = cộng
                 item['score_adj']   = score_adj
                 item['b_penalty']   = b_penalty
