@@ -4805,6 +4805,17 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
                 n_pass_sym = 0
                 send(f'⚠ {sym}: quá ít lệnh cho WF symbol ({n_total}L)', chat_id)
 
+            # ── 6b. Deep Trade Analytics (Block 1-4, giống /bt) ─────────
+            try:
+                _cfg_sl_val = 0.07 if raw else _bt.SYMBOL_CONFIG.get(sym, {}).get('sl', 0.07)
+                _cfg_sc_val = 65   if raw else _bt.SYMBOL_CONFIG.get(sym, {}).get('min_score', 65)
+                _deep_msgs  = _fmt_trade_analytics(buy_df, _cfg_sl_val, _cfg_sc_val)
+                for _dm in _deep_msgs:
+                    if _dm and _dm.strip():
+                        send(_dm, chat_id)
+            except Exception as _de:
+                logger.warning(f'_fmt_trade_analytics {sym}: {_de}')
+
             # ── 7. WF per bad bucket ──────────────────────────────────────
             if bad_buckets:
                 summary = f'<b>Buckets âm rõ — {sym}</b> (Exp&lt;-0.5%, n≥{MIN_N_SCABT}L)' + NL
