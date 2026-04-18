@@ -4472,6 +4472,160 @@ def _scabt_send_breakdown(sym, buy_df, base, chat_id, label=''):
     return bad_buckets
 
 
+def _scabt_send_cross(sym, buy_df, base, chat_id):
+    """Gửi cross-dimension analysis C1×C2 (VNI × Vol). Chỉ show bucket n≥15L."""
+    NL  = chr(10)
+    VNI_ORDER = ['UP', 'FLAT', 'DOWN']
+    VOL_ORDER = ['HIGH', 'MED', 'NORM', 'LOW']
+
+    msg = f'<b>Cross C1×C2 — VNI × Vol — {sym}</b>' + NL
+    msg += f'  {"":8}'
+    for vol in VOL_ORDER:
+        msg += f'  {vol:>10}'
+    msg += NL + '  ' + '─' * 52 + NL
+
+    has_data = False
+    for vni in VNI_ORDER:
+        row_str = f'  {vni:<8}'
+        for vol in VOL_ORDER:
+            sub = buy_df[(buy_df['vni_ctx'] == vni) & (buy_df['vol_ctx'] == vol)]
+            s   = _scabt_stats(sub)
+            if s is None or s['n'] < MIN_N_SCABT:
+                row_str += f'  {"n<15":>10}'
+            else:
+                has_data = True
+                icon = '✅' if s['exp'] >= 0.5 else ('❌' if s['exp'] < -0.5 else '➡')
+                cell = f'{icon}{s["exp"]:+.1f}%({s["n"]})'
+                row_str += f'  {cell:>10}'
+        msg += row_str + NL
+
+    if has_data:
+        send(msg, chat_id)
+
+    # C1×C3: VNI × Score bucket (thường ít data hơn, chỉ show nếu có ≥2 cell đủ n)
+    SCORE_ORDER = ['65-74', '75-84', '85-94', '95+']
+    msg2 = f'<b>Cross C1×C3 — VNI × Score — {sym}</b>' + NL
+    msg2 += f'  {"":8}'
+    for sc in SCORE_ORDER:
+        msg2 += f'  {sc:>10}'
+    msg2 += NL + '  ' + '─' * 52 + NL
+
+    n_cells = 0
+    for vni in VNI_ORDER:
+        row_str = f'  {vni:<8}'
+        for sc in SCORE_ORDER:
+            sub = buy_df[(buy_df['vni_ctx'] == vni) & (buy_df['score_ctx'] == sc)]
+            s   = _scabt_stats(sub)
+            if s is None or s['n'] < MIN_N_SCABT:
+                row_str += f'  {"n<15":>10}'
+            else:
+                n_cells += 1
+                icon = '✅' if s['exp'] >= 0.5 else ('❌' if s['exp'] < -0.5 else '➡')
+                cell = f'{icon}{s["exp"]:+.1f}%({s["n"]})'
+                row_str += f'  {cell:>10}'
+        msg2 += row_str + NL
+
+    if n_cells >= 2:
+        send(msg2, chat_id)
+
+
+def _scabt_wf_rule(sym, buy_df_full, col, bad_val, chat_id):
+    """
+    Walk-Forward validation cho 1 bad bucket rule.
+    Ý tưởng: nếu ta skip trades thuộc bucket (col=bad_val),
+    liệu improvement đó có hold OOS không?
+
+    Cách làm:
+    - Chia buy_df_full thành 4 windows theo thứ tự thời gian (IS=75%, OOS=25%)
+    - Mỗi window: tính Exp(all) vs Exp(filtered) → ghi lại delta
+    - Nếu delta dương nhất quán qua các windows → rule valid OOS
+
+    Trả về dict: {windows, avg_delta_is, avg_delta_oos, verdict}
+    """
+    NL = chr(10)
+    import pandas as pd
+
+    df = buy_df_full.copy().reset_index(drop=True)
+    n  = len(df)
+    if n < 40:
+        return None  # Không đủ data để WF
+
+    # Chia 4 windows — mỗi window OOS = 25% cuối window
+    # Dùng 4 folds: [0-25%], [25-50%], [50-75%], [75-100%] làm OOS lần lượt
+    fold_size = n // 4
+    if fold_size < 8:
+        return None
+
+    results = []
+    for fold in range(4):
+        oos_start = fold * fold_size
+        oos_end   = oos_start + fold_size if fold < 3 else n
+        is_idx    = [i for i in range(n) if i < oos_start or i >= oos_end]
+        oos_idx   = list(range(oos_start, oos_end))
+
+        df_is  = df.iloc[is_idx]
+        df_oos = df.iloc[oos_idx]
+
+        def _delta(dff):
+            if len(dff) < 5:
+                return None
+            mask_keep = dff[col] != bad_val
+            s_all  = _scabt_stats(dff)
+            s_filt = _scabt_stats(dff[mask_keep])
+            if s_all is None or s_filt is None or s_all['n'] < 5 or s_filt['n'] < 3:
+                return None
+            return round(s_filt['exp'] - s_all['exp'], 3)
+
+        d_is  = _delta(df_is)
+        d_oos = _delta(df_oos)
+        if d_is is not None and d_oos is not None:
+            results.append({'fold': fold+1, 'd_is': d_is, 'd_oos': d_oos})
+
+    if len(results) < 2:
+        return None
+
+    avg_d_is  = round(sum(r['d_is']  for r in results) / len(results), 3)
+    avg_d_oos = round(sum(r['d_oos'] for r in results) / len(results), 3)
+    n_pos_oos = sum(1 for r in results if r['d_oos'] > 0)
+    consistency = n_pos_oos / len(results)  # tỷ lệ windows OOS có delta dương
+
+    # Verdict
+    if avg_d_oos >= 0.3 and consistency >= 0.75:
+        verdict = 'V'    # Robust — rule hold OOS
+        v_icon  = '✅'
+    elif avg_d_oos >= 0.1 and consistency >= 0.5:
+        verdict = '~'    # Trung bình
+        v_icon  = '🟡'
+    else:
+        verdict = '!'    # Yếu — rule không hold OOS
+        v_icon  = '❌'
+
+    # Format message
+    bucket_label = f'{col}={bad_val}'
+    msg = (
+        f'<b>WF Rule: skip {bucket_label} — {sym}</b>' + NL
+        + f'  {"Fold":<6} {"ΔIS":>8} {"ΔOOS":>8}' + NL
+        + '  ' + '─' * 26 + NL
+    )
+    for r in results:
+        is_icon  = '✅' if r['d_is']  > 0 else '❌'
+        oos_icon = '✅' if r['d_oos'] > 0 else '❌'
+        msg += f'  F{r["fold"]:<5} {r["d_is"]:>+7.2f}% {is_icon}  {r["d_oos"]:>+6.2f}% {oos_icon}' + NL
+    msg += '  ' + '─' * 26 + NL
+    msg += (
+        f'  Avg ΔIS={avg_d_is:+.2f}%  Avg ΔOOS={avg_d_oos:+.2f}%' + NL
+        + f'  OOS dương: {n_pos_oos}/{len(results)} folds ({consistency:.0%})' + NL
+        + f'  {v_icon} Verdict: {"ROBUST — rule hold OOS" if verdict=="V" else ("TRUNG BÌNH" if verdict=="~" else "YẾU — rule KHÔNG hold OOS")}'
+    )
+    send(msg, chat_id)
+
+    return {
+        'bucket': bucket_label, 'results': results,
+        'avg_d_is': avg_d_is, 'avg_d_oos': avg_d_oos,
+        'consistency': consistency, 'verdict': verdict,
+    }
+
+
 def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
     """
     use_b_filter=False: Score A thuần + B-filter simulation (post-hoc)
@@ -4498,6 +4652,9 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
             )
             bad_buckets = _scabt_send_breakdown(sym, buy_df, base, chat_id, label='Score A' + raw_label)
 
+            # Cross-dimension analysis
+            _scabt_send_cross(sym, buy_df, base, chat_id)
+
             bad_vni  = buy_df['vni_ctx'] == 'DOWN'
             bad_vol  = buy_df['vol_ctx'] == 'LOW'
             bad_ma20 = buy_df['ma20_ctx'].isin(['EXT', 'FAR'])
@@ -4513,19 +4670,22 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
 
             bfilter_msg = f'<b>B-filter Simulation — {sym}</b>' + NL
             best_delta  = 0.0
+            best_s      = None
             for label, mask in filters:
                 sub = buy_df[mask]
                 s   = _scabt_stats(sub)
                 if s is None: continue
                 d_exp = s['exp'] - base['exp']
                 d_n   = len(sub) - base['n']
+                pf_str = f'{s["pf"]:.2f}' if s['pf'] < 99 else '99+'
                 icon  = '✅' if d_exp >= 0.3 else ('🟡' if d_exp >= 0 else '❌')
                 bfilter_msg += (
                     f'  {label:<26}  {s["n"]}L WR={s["wr"]:.0f}%'
-                    f' Exp={s["exp"]:+.2f}% Δ={d_exp:+.2f}% ({d_n:+d}L) {icon}' + NL
+                    f' Exp={s["exp"]:+.2f}% PF={pf_str} Δ={d_exp:+.2f}% ({d_n:+d}L) {icon}' + NL
                 )
                 if d_exp > best_delta:
                     best_delta = d_exp
+                    best_s     = s
 
             if best_delta >= 0.5:
                 verdict = f'✅ B-filter hiệu quả rõ (+{best_delta:.2f}%) — nên implement'
@@ -4541,8 +4701,17 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
                 for col, bucket, s in bad_buckets:
                     summary += f'  ❌ {col}={bucket}: Exp={s["exp"]:+.2f}% WR={s["wr"]:.0f}% n={s["n"]}L' + NL
                 send(summary, chat_id)
+                # Walk-forward validation cho từng bad bucket
+                wf_results = []
+                for col, bucket, s in bad_buckets:
+                    wf = _scabt_wf_rule(sym, buy_df, col, bucket, chat_id)
+                    if wf:
+                        wf_results.append(wf)
+            else:
+                wf_results = []
 
-            return {'sym': sym, 'base': base, 'bad_buckets': bad_buckets, 'best_delta': best_delta}
+            return {'sym': sym, 'base': base, 'bad_buckets': bad_buckets,
+                    'best_delta': best_delta, 'wf_results': wf_results}
 
         else:
             bf = _bt.run_b_filter_comparison(sym, verbose=False)
