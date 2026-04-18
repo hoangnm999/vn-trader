@@ -4628,14 +4628,39 @@ def _scabt_wf_rule(sym, buy_df_full, col, bad_val, chat_id):
 
 def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
     """
-    use_b_filter=False: Score A thuần + B-filter simulation (post-hoc)
-    use_b_filter=True : Score A + B-filter ON thật (backtest engine)
-    raw=True          : params chuẩn (min_score=65, no regime) — baseline sạch
-    raw=False         : dùng SYMBOL_CONFIG production per-symbol
+    Score A phân tích giống Score B:
+    1. Baseline + 4-dimension breakdown
+    2. Cross C1×C2, C1×C3
+    3. Edge summary (best vs worst context)
+    4. B-filter simulation (với PF)
+    5. WF tổng symbol (IS/OOS decay)
+    6. WF per bad bucket rule
+    7. Final recommendation
+    raw=True : params chuẩn (min_score=65, no regime)
+    raw=False: dùng SYMBOL_CONFIG production
     """
     import pandas as pd
     NL = chr(10)
     raw_label = ' [RAW]' if raw else ''
+
+    def _wr(df):
+        if len(df) == 0: return 0.0
+        return len(df[df['pnl'] > 0]) / len(df) * 100
+
+    def _exp(df):
+        if len(df) == 0: return 0.0
+        wins = df[df['pnl'] > 0]['pnl']
+        loss = df[df['pnl'] <= 0]['pnl']
+        wr_  = len(wins) / len(df)
+        aw   = wins.mean()        if len(wins)  > 0 else 0.0
+        al   = abs(loss.mean())   if len(loss)  > 0 else 0.0
+        return round(wr_ * aw - (1 - wr_) * al, 3)
+
+    def _pf(df):
+        w = df[df['pnl'] > 0]['pnl'].sum()
+        l = abs(df[df['pnl'] < 0]['pnl'].sum())
+        return round(w / l, 2) if l > 0 else 99.0
+
     try:
         import backtest as _bt
 
@@ -4645,73 +4670,189 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
                 send(f'❌ {sym}: không lấy được dữ liệu', chat_id)
                 return None
 
+            # ── 1. Header + Baseline ──────────────────────────────────────
             send(
                 f'📊 <b>Score A Context Analysis — {sym}{raw_label}</b>' + NL
                 + f'Baseline: {base["n"]}L | WR={base["wr"]:.0f}% | Exp={base["exp"]:+.2f}% | PF={base["pf"]}',
                 chat_id
             )
+
+            # ── 2. 4-dimension breakdown ──────────────────────────────────
             bad_buckets = _scabt_send_breakdown(sym, buy_df, base, chat_id, label='Score A' + raw_label)
 
-            # Cross-dimension analysis
+            # ── 3. Cross-dimension C1×C2, C1×C3 ──────────────────────────
             _scabt_send_cross(sym, buy_df, base, chat_id)
 
+            # ── 4. Edge summary — best vs worst context ───────────────────
+            # Tìm best và worst bucket có n≥15L trên mỗi dimension
+            sections = [
+                ('C1 VNI', 'vni_ctx',   ['UP', 'FLAT', 'DOWN']),
+                ('C2 Vol', 'vol_ctx',   ['HIGH', 'MED', 'NORM', 'LOW']),
+                ('C3 Score', 'score_ctx', ['65-74', '75-84', '85-94', '95+']),
+                ('C4 MA20', 'ma20_ctx',  ['BELOW', 'NEAR', 'OPT', 'EXT', 'FAR']),
+            ]
+            best_exp, worst_exp = -99, 99
+            best_lbl, worst_lbl = '', ''
+            for dim, col, order in sections:
+                for bucket in order:
+                    sub = buy_df[buy_df[col] == bucket]
+                    if len(sub) < MIN_N_SCABT: continue
+                    e = _exp(sub)
+                    if e > best_exp:
+                        best_exp = e; best_lbl = f'{dim}={bucket}(n={len(sub)})'
+                    if e < worst_exp:
+                        worst_exp = e; worst_lbl = f'{dim}={bucket}(n={len(sub)})'
+
+            edge_gap = round(best_exp - worst_exp, 3)
+            if edge_gap >= 1.5 and best_exp >= 0.5:
+                edge_icon = '✅'; edge_txt = f'Edge rõ ràng — gap={edge_gap:+.2f}%'
+            elif edge_gap >= 0.5:
+                edge_icon = '🟡'; edge_txt = f'Edge nhẹ — gap={edge_gap:+.2f}%'
+            else:
+                edge_icon = '⚠'; edge_txt = f'Edge không rõ — gap={edge_gap:+.2f}%'
+
+            edge_msg = (
+                f'<b>Edge Summary — {sym}{raw_label}</b>' + NL
+                + f'  Best:  {best_lbl} → Exp={best_exp:+.2f}%' + NL
+                + f'  Worst: {worst_lbl} → Exp={worst_exp:+.2f}%' + NL
+                + f'  {edge_icon} {edge_txt}'
+            )
+            send(edge_msg, chat_id)
+
+            # ── 5. B-filter simulation ────────────────────────────────────
             bad_vni  = buy_df['vni_ctx'] == 'DOWN'
             bad_vol  = buy_df['vol_ctx'] == 'LOW'
             bad_ma20 = buy_df['ma20_ctx'].isin(['EXT', 'FAR'])
             bad_scr  = buy_df['score_ctx'] == '65-74'
 
             filters = [
-                ('Baseline',             pd.Series([True]*len(buy_df), index=buy_df.index)),
-                ('Loai VNI DOWN',        ~bad_vni),
-                ('+ Vol LOW',            ~bad_vni & ~bad_vol),
-                ('+ MA20 EXT/FAR',       ~bad_vni & ~bad_vol & ~bad_ma20),
-                ('+ Score<75',           ~bad_vni & ~bad_vol & ~bad_ma20 & ~bad_scr),
+                ('Baseline',        pd.Series([True]*len(buy_df), index=buy_df.index)),
+                ('Loai VNI DOWN',   ~bad_vni),
+                ('+ Vol LOW',       ~bad_vni & ~bad_vol),
+                ('+ MA20 EXT/FAR',  ~bad_vni & ~bad_vol & ~bad_ma20),
+                ('+ Score<75',      ~bad_vni & ~bad_vol & ~bad_ma20 & ~bad_scr),
             ]
 
             bfilter_msg = f'<b>B-filter Simulation — {sym}</b>' + NL
-            best_delta  = 0.0
-            best_s      = None
+            best_delta = 0.0
+            best_s     = None
             for label, mask in filters:
                 sub = buy_df[mask]
                 s   = _scabt_stats(sub)
                 if s is None: continue
-                d_exp = s['exp'] - base['exp']
-                d_n   = len(sub) - base['n']
+                d_exp  = s['exp'] - base['exp']
+                d_n    = len(sub) - base['n']
                 pf_str = f'{s["pf"]:.2f}' if s['pf'] < 99 else '99+'
-                icon  = '✅' if d_exp >= 0.3 else ('🟡' if d_exp >= 0 else '❌')
+                icon   = '✅' if d_exp >= 0.3 else ('🟡' if d_exp >= 0 else '❌')
                 bfilter_msg += (
-                    f'  {label:<26}  {s["n"]}L WR={s["wr"]:.0f}%'
+                    f'  {label:<24}  {s["n"]}L WR={s["wr"]:.0f}%'
                     f' Exp={s["exp"]:+.2f}% PF={pf_str} Δ={d_exp:+.2f}% ({d_n:+d}L) {icon}' + NL
                 )
                 if d_exp > best_delta:
-                    best_delta = d_exp
-                    best_s     = s
+                    best_delta = d_exp; best_s = s
 
-            if best_delta >= 0.5:
-                verdict = f'✅ B-filter hiệu quả rõ (+{best_delta:.2f}%) — nên implement'
-            elif best_delta >= 0.2:
-                verdict = f'🟡 B-filter tác dụng nhẹ (+{best_delta:.2f}%) — xem xét'
-            else:
-                verdict = f'❌ B-filter không cải thiện đáng kể (Δ={best_delta:+.2f}%)'
-            bfilter_msg += NL + f'→ {verdict}'
+            if best_delta >= 0.5:   bf_verd = f'✅ Hiệu quả rõ (+{best_delta:.2f}%)'
+            elif best_delta >= 0.2: bf_verd = f'🟡 Tác dụng nhẹ (+{best_delta:.2f}%)'
+            else:                   bf_verd = f'❌ Không cải thiện (Δ={best_delta:+.2f}%)'
+            bfilter_msg += NL + f'→ {bf_verd}'
             send(bfilter_msg, chat_id)
 
+            # ── 6. WF tổng symbol (IS/OOS decay) ─────────────────────────
+            buy_sorted = buy_df.sort_values('date').reset_index(drop=True) if 'date' in buy_df.columns else buy_df.reset_index(drop=True)
+            n_total    = len(buy_sorted)
+            n_windows  = 4
+            win_size   = n_total // n_windows
+
+            if win_size >= 5:
+                wf_sym_lines = [f'📈 <b>Walk-Forward tổng symbol — {sym}{raw_label}</b>',
+                                '─' * 28,
+                                f'IS: {win_size*3}L / OOS: {win_size}L — {n_windows} windows']
+                n_pass_sym = 0
+                for w in range(n_windows):
+                    is_end    = w * win_size
+                    oos_start = w * win_size
+                    oos_end   = min((w + 1) * win_size, n_total)
+                    if is_end < 5: continue
+                    is_df_  = buy_sorted.iloc[:is_end]
+                    oos_df_ = buy_sorted.iloc[oos_start:oos_end]
+                    is_exp_ = _exp(is_df_)
+                    oos_exp_= _exp(oos_df_)
+                    is_wr_  = _wr(is_df_)
+                    oos_wr_ = _wr(oos_df_)
+                    decay_e = round(is_exp_ - oos_exp_, 3)
+                    decay_w = round(is_wr_  - oos_wr_,  1)
+                    passed  = oos_exp_ >= 0 and oos_wr_ >= 45
+                    ok      = '✅' if passed else '❌'
+                    if passed: n_pass_sym += 1
+                    try:
+                        w_lbl = buy_sorted['date'].iloc[oos_start][:7] + '–' + buy_sorted['date'].iloc[oos_end-1][:7]
+                    except Exception:
+                        w_lbl = f'W{w+1}'
+                    wf_sym_lines.append(
+                        f'{ok} W{w+1} [{w_lbl}]' + NL
+                        + f'   IS: WR={is_wr_:.0f}% Exp={is_exp_:+.2f}% (n={is_end}L)' + NL
+                        + f'   OOS: WR={oos_wr_:.0f}% Exp={oos_exp_:+.2f}% (n={len(oos_df_)}L)'
+                        + f' | decay WR={decay_w:+.1f}% Exp={decay_e:+.2f}%'
+                    )
+                pct_pass = n_pass_sym / n_windows * 100
+                if pct_pass >= 75:   wf_sym_v = f'✅ Robust ({n_pass_sym}/{n_windows} windows pass)'
+                elif pct_pass >= 50: wf_sym_v = f'🟡 Promising ({n_pass_sym}/{n_windows} windows pass)'
+                else:                wf_sym_v = f'❌ Không ổn định ({n_pass_sym}/{n_windows} windows pass)'
+                wf_sym_lines += ['', f'<b>WF Symbol: {wf_sym_v}</b>',
+                                 '<i>Pass = OOS Exp≥0% và WR≥45%</i>']
+                send(NL.join(wf_sym_lines), chat_id)
+            else:
+                n_pass_sym = 0
+                send(f'⚠ {sym}: quá ít lệnh cho WF symbol ({n_total}L)', chat_id)
+
+            # ── 7. WF per bad bucket ──────────────────────────────────────
             if bad_buckets:
                 summary = f'<b>Buckets âm rõ — {sym}</b> (Exp&lt;-0.5%, n≥{MIN_N_SCABT}L)' + NL
                 for col, bucket, s in bad_buckets:
                     summary += f'  ❌ {col}={bucket}: Exp={s["exp"]:+.2f}% WR={s["wr"]:.0f}% n={s["n"]}L' + NL
                 send(summary, chat_id)
-                # Walk-forward validation cho từng bad bucket
-                wf_results = []
+                wf_rule_results = []
                 for col, bucket, s in bad_buckets:
                     wf = _scabt_wf_rule(sym, buy_df, col, bucket, chat_id)
-                    if wf:
-                        wf_results.append(wf)
+                    if wf: wf_rule_results.append(wf)
             else:
-                wf_results = []
+                wf_rule_results = []
 
-            return {'sym': sym, 'base': base, 'bad_buckets': bad_buckets,
-                    'best_delta': best_delta, 'wf_results': wf_results}
+            # ── 8. Final recommendation ───────────────────────────────────
+            n_robust_rules = sum(1 for r in wf_rule_results if r['verdict'] == 'V')
+            rec_lines = [f'💡 <b>Khuyến nghị — {sym}{raw_label}</b>', '─' * 28]
+
+            if base['exp'] >= 1.0 and base['pf'] >= 1.3 and n_pass_sym >= 3:
+                rec_lines += [
+                    f'✅ Score A có edge tốt VÀ ổn định qua WF',
+                    f'→ Có thể thêm vào SIGNALS_WATCHLIST',
+                    f'→ Params: min_score=65, entry T+1',
+                ]
+            elif base['exp'] >= 0.5 and n_robust_rules > 0:
+                rec_lines += [
+                    f'🟡 Score A có edge với context đúng ({n_robust_rules} rule WF ROBUST)',
+                    f'→ Thêm watchlist với filter: {", ".join(f"{r["bucket"]}" for r in wf_rule_results if r["verdict"]=="V")}',
+                ]
+            elif base['exp'] < 0 and best_s and best_s['exp'] >= 1.0 and n_robust_rules >= 2:
+                rec_lines += [
+                    f'🟡 Baseline âm nhưng sau filter có edge ({best_s["exp"]:+.2f}% PF={best_s["pf"]:.2f})',
+                    f'→ Xem xét thêm watchlist với filter chặt',
+                    f'→ Cần monitor live sau khi deploy',
+                ]
+            else:
+                rec_lines += [
+                    f'❌ Chưa đủ evidence để thêm watchlist',
+                    f'→ Baseline Exp={base["exp"]:+.2f}% | WF {n_pass_sym}/{n_windows} pass',
+                ]
+
+            rec_lines.append(f'<i>Methodology: Entry T+1 | params {"chuẩn RAW" if raw else "per-symbol config"}</i>')
+            send(NL.join(rec_lines), chat_id)
+
+            return {
+                'sym': sym, 'base': base, 'bad_buckets': bad_buckets,
+                'best_delta': best_delta, 'wf_rule_results': wf_rule_results,
+                'n_pass_sym': n_pass_sym, 'edge_gap': edge_gap,
+            }
 
         else:
             bf = _bt.run_b_filter_comparison(sym, verbose=False)
@@ -4770,52 +4911,15 @@ def _scabt_run_one(sym, chat_id, use_b_filter=False, raw=False):
         return None
 
 
-def handle_scabt(args, chat_id):
-    """
-    /scabt              — Score A context analysis toàn SIGNALS_WATCHLIST (production config)
-    /scabt SYM          — Score A context analysis 1 mã (production config)
-    /scabt SYM bf       — Score A + B-filter ON thật
-    /scabt bf           — Batch toàn watchlist với B-filter ON
-    /scabt SYM raw      — Baseline sạch: min_score=65, no regime, params chuẩn
-    /scabt raw          — Batch toàn watchlist với params chuẩn (so sánh công bằng)
-    """
-    NL    = chr(10)
-    parts = args.strip().upper().split() if args.strip() else []
-    use_bf = 'BF' in parts
-    use_raw = 'RAW' in parts
-    syms   = [p for p in parts if p not in ('BF', 'RAW')]
-    sym    = syms[0] if syms else None
-    mode_label = ' [B-filter ON]' if use_bf else (' [RAW]' if use_raw else '')
-
-    if sym:
-        # Cho phép chạy bất kỳ mã nào — không giới hạn trong SIGNALS_WATCHLIST
-        in_wl = sym in SIGNALS_WATCHLIST
-        wl_note = '' if in_wl else ' <i>(ngoài watchlist)</i>'
-        send(f'⏳ Đang phân tích <b>{sym}</b>{mode_label}{wl_note}...', chat_id)
-        _scabt_run_one(sym, chat_id, use_b_filter=use_bf, raw=use_raw)
-        return
-
-    watchlist = list(SIGNALS_WATCHLIST)
-    send(
-        f'⏳ <b>Score A Context Analysis{mode_label}</b> — {len(watchlist)} mã' + NL
-        + 'Gửi kết quả từng mã khi xong. Ước tính ~3-5 phút.',
-        chat_id
-    )
-
-    results = []
-    failed  = []
-    for s in watchlist:
-        send(f'🔄 Đang chạy <b>{s}</b>{mode_label}...', chat_id)
-        r = _scabt_run_one(s, chat_id, use_b_filter=use_bf, raw=use_raw)
-        if r: results.append(r)
-        else: failed.append(s)
-
+def _scabt_send_batch_summary(results, failed, total, mode_label, use_bf, chat_id):
+    """Gửi tổng kết cho batch /scabt (watchlist hoặc tự chọn)."""
+    NL = chr(10)
     if not results:
         send('❌ Không chạy được mã nào.', chat_id)
         return
 
     summary = f'<b>📋 TỔNG KẾT — Score A{mode_label}</b>' + NL
-    summary += f'Chạy: {len(results)}/{len(watchlist)} mã'
+    summary += f'Chạy: {len(results)}/{total} mã'
     if failed:
         summary += f' | Failed: {", ".join(failed)}'
     summary += NL + NL
@@ -4834,19 +4938,93 @@ def handle_scabt(args, chat_id):
         results_sorted = sorted(results, key=lambda x: x['base']['exp'], reverse=True)
         summary += '<b>Baseline Exp mỗi mã:</b>' + NL
         for r in results_sorted:
-            b     = r['base']
-            n_bad = len(r['bad_buckets'])
-            icon  = '✅' if b['exp'] >= 0.5 else ('🟡' if b['exp'] >= 0 else '❌')
-            summary += f'  {r["sym"]:<6} {b["n"]}L WR={b["wr"]:.0f}% Exp={b["exp"]:+.2f}% bad={n_bad} {icon}' + NL
+            b    = r['base']
+            n_bad = len(r.get('bad_buckets', []))
+            wf_ok = r.get('n_pass_sym', 0)
+            gap   = r.get('edge_gap', 0)
+            icon  = '✅' if b['exp'] >= 1.0 and b['pf'] >= 1.3 else ('🟡' if b['exp'] >= 0.3 else ('➡' if b['exp'] >= 0 else '❌'))
+            summary += (
+                f'  {r["sym"]:<6} {b["n"]}L WR={b["wr"]:.0f}%'
+                f' Exp={b["exp"]:+.2f}% PF={b["pf"]:.2f}'
+                f' | bad={n_bad} WF={wf_ok}/4 gap={gap:+.1f}% {icon}' + NL
+            )
 
-    if any(r['bad_buckets'] for r in results):
+    if any(r.get('bad_buckets') for r in results):
         summary += NL + '<b>Mã còn buckets âm rõ:</b>' + NL
         for r in results:
-            if r['bad_buckets']:
+            if r.get('bad_buckets'):
                 labels = [f'{c}={bk}' for c, bk, _ in r['bad_buckets']]
-                summary += f'  {r["sym"]}: {", ".join(labels)}' + NL
+                robust = [rw['bucket'] for rw in r.get('wf_rule_results', []) if rw['verdict'] == 'V']
+                wf_txt = f' | WF ROBUST: {", ".join(robust)}' if robust else ''
+                summary += f'  {r["sym"]}: {", ".join(labels)}{wf_txt}' + NL
 
     send(summary, chat_id)
+
+
+def handle_scabt(args, chat_id):
+    """
+    /scabt                      — Batch toàn SIGNALS_WATCHLIST
+    /scabt SYM                  — 1 mã
+    /scabt SYM1 SYM2 SYM3       — Nhiều mã tự chọn
+    /scabt ... raw               — Params chuẩn (min_score=65, no regime)
+    /scabt ... bf                — B-filter ON thật
+    Ví dụ: /scabt DPM HMC VIX raw
+    """
+    NL    = chr(10)
+    parts = args.strip().upper().split() if args.strip() else []
+    use_bf  = 'BF'  in parts
+    use_raw = 'RAW' in parts
+    syms    = [p for p in parts if p not in ('BF', 'RAW')]
+    mode_label = ' [B-filter ON]' if use_bf else (' [RAW]' if use_raw else '')
+
+    # ── Nhiều mã tự chọn ─────────────────────────────────────────────────────
+    if len(syms) > 1:
+        total = len(syms)
+        send(
+            f'⏳ <b>Score A Context Analysis{mode_label}</b> — {total} mã tự chọn: '
+            + ' '.join(syms),
+            chat_id
+        )
+        results = []
+        failed  = []
+        for s in syms:
+            in_wl  = s in SIGNALS_WATCHLIST
+            wl_note = '' if in_wl else ' <i>(ngoài watchlist)</i>'
+            send(f'🔄 Đang chạy <b>{s}</b>{mode_label}{wl_note}...', chat_id)
+            r = _scabt_run_one(s, chat_id, use_b_filter=use_bf, raw=use_raw)
+            if r: results.append(r)
+            else: failed.append(s)
+        # Summary batch
+        if results:
+            _scabt_send_batch_summary(results, failed, total, mode_label, use_bf, chat_id)
+        return
+
+    # ── 1 mã ─────────────────────────────────────────────────────────────────
+    if len(syms) == 1:
+        sym    = syms[0]
+        in_wl  = sym in SIGNALS_WATCHLIST
+        wl_note = '' if in_wl else ' <i>(ngoài watchlist)</i>'
+        send(f'⏳ Đang phân tích <b>{sym}</b>{mode_label}{wl_note}...', chat_id)
+        _scabt_run_one(sym, chat_id, use_b_filter=use_bf, raw=use_raw)
+        return
+
+    # ── Batch toàn watchlist ──────────────────────────────────────────────────
+    watchlist = list(SIGNALS_WATCHLIST)
+    send(
+        f'⏳ <b>Score A Context Analysis{mode_label}</b> — {len(watchlist)} mã' + NL
+        + 'Gửi kết quả từng mã khi xong. Ước tính ~3-5 phút.',
+        chat_id
+    )
+
+    results = []
+    failed  = []
+    for s in watchlist:
+        send(f'🔄 Đang chạy <b>{s}</b>{mode_label}...', chat_id)
+        r = _scabt_run_one(s, chat_id, use_b_filter=use_bf, raw=use_raw)
+        if r: results.append(r)
+        else: failed.append(s)
+
+    _scabt_send_batch_summary(results, failed, len(watchlist), mode_label, use_bf, chat_id)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
