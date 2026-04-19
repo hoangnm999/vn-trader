@@ -32,6 +32,14 @@ Cập nhật: 16/04/2026 — Session 16:
   Duplicate SCB block đã xóa (bug S15)
   SCB_WATCHLIST tổng: 19 → 24 mã
 
+Cập nhật: 19/04/2026 — Session 23 (S22 handoff):
+  SIGNALS_WATCHLIST: +QCG, +HTG, -PVD → 18 mã (theo Session 22 verdict)
+  SYMBOL_CONFIG: thêm QCG (Tier1), HTG (Tier2); PVD → wf_verdict LOAI
+  POSITION_SIZE_CAPS: thêm QCG=1.0, HTG=1.0, VIX=0.7, GIL=0.5, LPB=0.5, VDS=0.5, FRT=0.5, MCH=0.5, DGC=0.5, VND=0.5
+  HOLD_DAYS_OVERRIDE: xóa STB/HAH/PC1=20d → dùng 10d theo Score A BT params
+  SCORE_SKIP_BUCKETS: thêm VDS (Vol MED + Score 75-84), PC1 (Vol MED + Score 95+)
+  N_GATE_SIZING: thêm dict mới — n<15 không scale up, n 15-25 max 50%
+
 Cập nhật: 16/04/2026 — Session 17:
   SCB_WATCHLIST_TIER_A: thêm HMC (Robust 3/3, ΔExp=+2.21%, PF=1.64)
                          demote CSV Robust→Prom (BT mới: WF xuống Prom)
@@ -133,8 +141,14 @@ SYMBOL_CONFIG = {
     'VCB': {'sl': 0.05, 'tp': 0.09, 'min_score': 55, 'group': 'Ngan hang',    'wf_verdict': 'YEU'      , 'shark_mode': 'AS', 'shark_min': 50, 'shark_warn': 65, 'use_regime': False, 'trigger_mode': 'filter_confirm', 'min_conviction': 3.0},
     'MWG': {'sl': 0.05, 'tp': 0.09, 'min_score': 65, 'group': 'Ban le',       'wf_verdict': 'CHAP_NHAN'         , 'shark_mode': 'weak', 'shark_min': 60, 'use_regime': True, 'trigger_mode': 'score_primary'},
     'CMG': {'sl': 0.05, 'tp': 0.09, 'min_score': 55, 'group': 'Cong nghe',    'wf_verdict': 'YEU'         , 'shark_mode': 'AS', 'shark_min': 60, 'use_regime': True, 'entry': 'T+1', 'entry_note': 'T+1 tot hon T (+3.8% WR)', 'trigger_mode': 'filter_led'},
-    'PVD': {'sl': 0.07, 'tp': 0.14, 'min_score': 65, 'group': 'Dau khi',      'wf_verdict': 'CHUA_BT'     , 'shark_mode': 'none', 'use_regime': False, 'trigger_mode': 'score_primary'},
-    # S20: /scabt_hose Exp=+2.96% PF=2.44 n=63L | min_score=65 (score thấp lại tốt) | MA20 OPT Exp=+4.38% n=37L
+    'PVD': {'sl': 0.07, 'tp': 0.14, 'min_score': 65, 'group': 'Dau khi',      'wf_verdict': 'LOAI'        , 'shark_mode': 'none', 'use_regime': False, 'trigger_mode': 'score_primary'},
+    # S20: Exp=+2.96% PF=2.44 n=63L | S22: LOAI — BF không cải thiện (+0.01%), WF 2/4
+    # S23: thêm QCG (Tier1) và HTG (Tier2) từ Score A BT Session 22
+    'QCG': {'sl': 0.07, 'tp': 0.14, 'min_score': 65, 'b_filter': False, 'group': 'Bat dong san', 'wf_verdict': 'TOT', 'shark_mode': 'none', 'use_regime': False, 'trigger_mode': 'score_primary'},
+    # S22: Baseline +2.27% PF=1.62 n=71L WF 3/4 ✅ | FLAT tốt nhất +6.04% (unique) | HK rate 13% thấp nhất B1
+    # Không skip VNI FLAT — QCG là mã DUY NHẤT FLAT > UP (+6.04% vs +0.59%)
+    'HTG': {'sl': 0.07, 'tp': 0.14, 'min_score': 65, 'b_filter': False, 'group': 'Thep',         'wf_verdict': 'TOT', 'shark_mode': 'none', 'use_regime': False, 'trigger_mode': 'score_primary'},
+    # S22: Baseline +1.66% PF=1.93 n=81L WF 3/4 ✅ | skip Vol HIGH (WF ROBUST 3/4) | HK 68% → trailing aggressive MFE≥6%
     'REE': {'sl': 0.07, 'tp': 0.14, 'min_score': 45, 'group': 'Dien',         'wf_verdict': 'YEU'         , 'shark_mode': 'S', 'shark_min': 65, 'shark_min_hard': 50, 'use_regime': False, 'entry': 'T+1', 'entry_note': 'T+1 dao nguoc WR+8.5% PnL+1.35%', 'trigger_mode': 'filter_led'},
     # DGC đã có trong score A watchlist nhưng WF yếu qua /bt (OOS=33%) — giữ theo dõi
     'DGC_NOTE': {},  # placeholder — DGC vẫn trong SIGNALS_WATCHLIST nhưng cần monitor WF
@@ -169,26 +183,44 @@ DEFAULT_TP = 0.14
 #   CTS  WR=51.9% PF=1.63 OOS=50%  decay=+7%  | WF OOS 50% caution
 # Session 10 — thay thế HCM
 #   VND  WR=53.2% PF=1.74 OOS=66.7% decay=-16.5% | Cap 70% | skip score 75-84
+# ── SIGNALS_WATCHLIST — Score A only ─────────────────────────────────────────
+# Dùng cho /signals và /sascreen. KHÔNG liên quan ML.
+# Session 9  (14/04/2026): loại HCM, update số liệu v2
+# Session 10 (14/04/2026): thêm VND thay slot HCM
+# Session 20 (18/04/2026): loại SSI + NKG, thêm PVD + VCI + HPG → 11 mã
+# Session 22 (19/04/2026): +QCG +HTG -PVD → 18 mã (Score A BT Combined Report)
+#   PVD LOAI: BF không cải thiện (+0.01%), WF 2/4 — edge quá mỏng
+#   QCG Tier1: PF=1.62 WF 3/4 ✅ | FLAT unique +6.04% | HK 13%
+#   HTG Tier2: PF=1.93 WF 3/4 ✅ | skip Vol HIGH ROBUST | HK 68%
+#
+# ⚠ Sector concentration:
+#   Chứng khoán: VCI, CTS, VND, VDS = 4/18 → không trade đồng thời quá 2 mã
+#   Ngân hàng: STB, LPB = 2/18 → OK
+#   Hóa chất/Thép: DGC, HPG, HTG = 3/18 → không trade đồng thời quá 2 mã
+#   BĐS/Đầu tư: QCG, HHS = 2/18 → OK
 SIGNALS_WATCHLIST = [
-    # ── Tier 1 (2 mã — HCM loại S9, SSI/NKG loại S20) ────────────────────────
-    'DGC',   # Hóa chất    | PF=1.36 | WR=50.0% | OOS=42%   | Cap 50%
-    'FRT',   # Bán lẻ      | PF=1.38 | WR=51.1% | OOS=62%   | skip DOWN/HIGH_VOL
-    # ── Tier 2 (5 mã session 4+9) ─────────────────────────────────────────────
-    'HAH',   # Logistics   | PF=1.39 | WR=52.2% | OOS=65%   | Hold 20d
-    'PC1',   # Điện/XD     | PF=1.71 | WR=56.8% | OOS=78%   | Hold 20d
-    'STB',   # Ngân hàng   | PF=1.75 | WR=56.5% | OOS=83%   | Hold 20d
-    'MCH',   # FMCG        | PF=1.61 | WR=48.8% | OOS=72%   | Cap 70%
-    'CTS',   # CK          | PF=1.63 | WR=51.9% | OOS=50%   | caution OOS
-    # ── Session 10 — thay thế HCM ─────────────────────────────────────────────
-    'VND',   # CK          | PF=1.74 | WR=53.2% | OOS=66.7% | Cap 70% ⚠ CK thứ 3
-    # ── Session 20 — thêm từ /scabt_hose + /scabt analysis ──────────────────────
-    'PVD',   # Dầu khí     | PF=2.44 | WR=60%   | Exp=+2.96% | min_score=65 | MA20 OPT xuất sắc (+4.38%)
-    'VCI',   # CK          | PF=1.84 | WR=55%   | Exp=+1.74% | min_score=85 | skip VNI FLAT + Vol LOW
-    'HPG',   # Thép        | PF=1.76 | WR=54%   | Exp=+1.60% | min_score=85 | skip VNI FLAT (n=22L)
+    # ── Tier 1 — Trade tự do (WF 3/4 ✅, PF≥1.62, rule clean) ───────────────
+    'STB',   # Ngân hàng   | PF=2.14 | WF 3/4 ✅ | Score 95+ FULL SIZE | Slow >> Fast
+    'VCI',   # CK          | PF=1.79 | WF 2/4    | min_score=75 | Score 85+/95+ tốt
+    'VIX',   # CK          | PF=2.07 | WF 3/4 ✅ | Vol LOW → 50% size (L2)
+    'HHS',   # BĐS/Đầu tư  | PF=2.13 | WF 3/4 ✅ | skip VNI FLAT | Fast resolver
+    'QCG',   # BĐS         | PF=1.62 | WF 3/4 ✅ | FLAT tốt nhất +6.04% — UNIQUE | HK 13%
+    # ── Tier 2 — Filter rõ ràng (rule WF ROBUST, cap hoặc filter áp dụng) ───
+    'CTS',   # CK          | PF=1.72 | WF 3/4 ✅ | skip Vol LOW
+    'HAH',   # Logistics   | PF=1.48 | WF 2/4    | skip Vol LOW | BF +1.92% strong
+    'HTG',   # Thép        | PF=1.93 | WF 3/4 ✅ | skip Vol HIGH | HK 68%
+    'LPB',   # Ngân hàng   | PF=1.62 | WF 2/4    | skip Vol LOW | Fast Exp=-3.68% NGUY HIỂM
+    'ORS',   # Dịch vụ     | PF=1.70 | WF 2/4    | skip VNI FLAT | PAUSE sau 2 SL
+    'GIL',   # May mặc     | PF=1.89 | WF 2/4    | skip VNI FLAT | cap 50%
+    'VDS',   # CK          | PF=1.69 | WF 1/4 ⚠  | skip Vol MED + Score 75-84 | 2 rules ROBUST
+    'PC1',   # Điện/XD     | PF=1.46 | WF 1/4 ⚠  | skip Vol MED + Score 95+   | 2 rules ROBUST 4/4
+    'HPG',   # Thép        | PF=1.75 | WF 2/4    | skip VNI FLAT + CLIMAX (pending)
+    # ── Tier 3 — Monitor, filter chặt, cap 50% ───────────────────────────────
+    'FRT',   # Bán lẻ      | PF=1.58 | WF 2/4    | NORM_VOL only | Max SL streak 11L ⚠
+    'MCH',   # FMCG        | PF=1.60 | WF 2/4    | skip VNI DOWN | Signal risk 71%
+    'DGC',   # Hóa chất    | PF=1.53 | WF 2/4    | skip DOWN+HIGH_VOL | FAST resolver DUY NHẤT
+    'VND',   # CK          | PF=1.35 | WF 1/4 ⚠  | skip VNI FLAT | WF yếu
 ]
-# HCM loại session 9. VND thêm session 10 (sascreen WF=V + /bt Robust).
-# Session 20: thêm PVD, VCI, HPG. Loại SSI (Exp=-0.08% PF=0.97) và NKG (Exp=+0.53% PF=1.16 score<75 bucket âm).
-# ⚠ Sector concentration: VND+CTS+VCI = 3/11 mã chứng khoán — tránh trade đồng thời.
 
 # ── SIGNALS_MANUAL — đã xóa toàn bộ (VND/VIC/PDR WF yếu qua /bt) ────────────
 # Giữ list rỗng để không break code cũ import SIGNALS_MANUAL
@@ -387,18 +419,36 @@ SCB_BT_STATS = {
 # Trader tự theo dõi và áp dụng thủ công.
 # Per-symbol SL streak đã có trong /bt Deep Analytics Block 3E.
 PORTFOLIO_SL_STREAK_THRESHOLD = 4  # Ngưỡng SL liên tiếp toàn watchlist → giảm 50% size
-HOLD_DAYS_OVERRIDE = {
-    'STB': 20,   # HK rate 59%, MFE +6.9% tại d20
-    'HAH': 20,   # HK rate 63%, MFE +7.2% tại d20
-    'PC1': 20,   # HK rate 70%, MFE +7.6% tại d21
-}
+# S23: HOLD_DAYS_OVERRIDE reset về default 10d theo Score A BT S22 params
+# S9 từng set STB/HAH/PC1=20d — nhưng BT S22 dùng hold=10d làm baseline → nhất quán
+HOLD_DAYS_OVERRIDE = {}  # Empty — tất cả dùng HOLD_DAYS=10 từ global
 
 # ── SESSION 9+10 PATCH: Position size caps ────────────────────────────────────
+# S23 update: align với Score A BT S22 Combined Report verdict
+# Format: 1.0 = FULL | 0.7 = 70% | 0.5 = 50% cap
 POSITION_SIZE_CAPS = {
-    'NKG': 0.50,   # WF OOS=25%, IS overfit
-    'DGC': 0.50,   # MaxDD -74.8%, suy yếu
-    'MCH': 0.70,   # False BK 80%, req EXTENDED>5%
-    'VND': 0.70,   # Session 10: new entry, MaxDD -37.2% năm 2024 — size nhỏ khi mới thêm
+    # ── Tier 1 — FULL SIZE (không cap) ───────────────────────────────────────
+    'STB': 1.0,   # WF 3/4 ✅ CLEAN — Score 95+ FULL SIZE
+    'QCG': 1.0,   # WF 3/4 ✅ CLEAN — FLAT unique, không cap
+    'HHS': 1.0,   # WF 3/4 ✅ Fast resolver — FULL khi skip FLAT đúng
+    # ── Tier 2 — rule filter → FULL hoặc 50% ─────────────────────────────────
+    'CTS': 1.0,   # WF 3/4 ✅ FULL khi skip Vol LOW đúng
+    'HAH': 1.0,   # BF +1.92% strong — FULL khi skip Vol LOW đúng
+    'HTG': 1.0,   # WF 3/4 ✅ FULL khi skip Vol HIGH đúng. HK heavy → trailing MFE≥6%
+    'PC1': 1.0,   # 2 rules ROBUST 4/4 — FULL khi filter đúng. ⚠ WF symbol 1/4
+    'HPG': 1.0,   # WF 2/4 — FULL, rules pending confirm
+    'VIX': 0.7,   # Vol LOW → soft L2 50%. Overall cap 70%
+    'LPB': 0.5,   # WF 2/4 | Fast nguy hiểm (-3.68%) — cap 50%
+    'ORS': 1.0,   # FULL nhưng PAUSE sau 2 SL (WR=12%)
+    'GIL': 0.5,   # WF 2/4 — cap 50% tổng
+    'VDS': 0.5,   # WF 1/4 ⚠ — cap 50% dù 2 rules ROBUST. Fast nguy hiểm (-2.25%)
+    # ── Tier 3 — cap 50% ─────────────────────────────────────────────────────
+    'FRT': 0.5,   # Max SL streak 11L ⚠ — monitor chặt
+    'MCH': 0.5,   # Signal risk 71% — entry quality >> size
+    'DGC': 0.5,   # W4 OOS crash | FAST resolver duy nhất — exit rule riêng
+    'VND': 0.5,   # WF 1/4 ⚠ — cap 50% cho đến khi live confirm
+    'VCI': 0.7,   # WF 2/4 borderline — 70% cap, monitor
+    'NKG': 0.50,  # Legacy — WF OOS=25%, IS overfit (không còn watchlist)
 }
 
 # ── SESSION 9 PATCH: Per-symbol score thresholds ──────────────────────────────
@@ -410,15 +460,28 @@ SCORE_THRESHOLDS_PER_SYMBOL = {
 
 # ── SESSION 10 PATCH: Score skip buckets (range, không chỉ threshold tối thiểu) ─
 # Dict format: symbol → list of (lo, hi) buckets cần SKIP
-# Khác với SCORE_THRESHOLDS_PER_SYMBOL (threshold tối thiểu đơn giản):
-#   SCORE_SKIP_BUCKETS dùng cho mã có "bucket giữa" âm bất thường
-# VND: 65-74 BEST (+3.03) | 75-84 WORST (-2.21) | 85+ tốt → skip bucket 75-84
+# S23 update: thêm VDS, PC1 từ Score A BT S22
 SCORE_SKIP_BUCKETS = {
-    'VND': [(75, 84)],   # Exp=-2.21 (17L) — bucket WORST, ngược intuition
-    'DGC': [(85, 94)],   # Exp=-0.233% (27L) — bucket âm dù score cao
+    'VND': [(75, 84)],        # Exp=-2.21% (17L) WF 4/4 — bucket WORST, ngược intuition
+    'DGC': [(85, 94)],        # Exp=-0.233% (27L) — bucket âm dù score cao
+    'VDS': [(75, 84)],        # Exp=-1.56% (15L) WF 4/4 ROBUST — bucket âm
+    'PC1': [(95, 100)],       # Exp=-0.89% (30L) WF 4/4 ROBUST — score 95+ skip
     # DGC: SCORE_THRESHOLDS=75 chỉ block <75, không block 85-94.
     # Cần SCORE_SKIP_BUCKETS riêng để skip đúng bucket 85-94.
-    # Trade DGC khi score 75-84 hoặc 95+.
+}
+
+# ── SESSION 23: N-Gate Sizing — không scale size lên khi n bucket nhỏ ──────────
+# Nguyên tắc: edge mạnh từ subset nhỏ → variance cao → không FULL SIZE tự động
+# n < 15L  : ⚠ không kết luận — giữ mặc định, không scale lên
+# n 15-25L : tạm kết luận — tối đa 50% size dù Exp cao
+# n ≥ 25L  : tin cậy — có thể FULL SIZE theo Exp
+# n ≥ 40L  : rất tin cậy
+# Áp dụng tại runtime khi bot đọc bucket sizing recommendation.
+# Dict này dùng để document — enforcement thực hiện trong _check_bf_context.
+N_GATE_SIZING = {
+    'min_n_full_size': 25,    # n≥25L mới được FULL SIZE theo Exp bucket
+    'min_n_half_size': 15,    # n 15-25L → tối đa 50% size
+    'max_size_small_n': 0.5,  # Cap cho bucket n<25L
 }
 
 # ── BACKTEST_WATCHLIST — ML watchlist, dùng cho /mlscan và /mlbt all ─────────

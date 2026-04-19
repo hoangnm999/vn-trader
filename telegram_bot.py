@@ -208,67 +208,160 @@ except ImportError:
 API_URL = os.environ.get('API_BASE_URL', 'http://localhost:8080')
 
 TRADE_PERSONALITY = {
-    # sym: (pattern, hold_note, emoji)
+    # ══════════════════════════════════════════════════════════════════════════
+    # S23 (19/04/2026): Rebuild đầy đủ 18 mã từ Score A BT Combined Report S22
+    # MFE trailing rules được parametrize rõ ràng:
+    #   Trigger 1: MFE ≥ 6% → move SL lên breakeven (+0%)
+    #   Trigger 2: MFE ≥ 8% → move SL lên +3% (lock partial profit)
+    # Pattern:
+    #   'slow'  = Slow >> Fast, hold full 10 phiên, không exit sớm
+    #   'fast'  = Fast resolver, exit sau 6 phiên nếu MFE < threshold
+    #   'neutral' = hold theo kế hoạch
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── Tier 1 ────────────────────────────────────────────────────────────────
     'STB': (
         'slow',
-        'Slow wins (WR slow=63% vs fast=29%) — giữ đủ hold, đừng exit sớm. '
-        '86% HK đã lên MFE+7.6% rồi rơi → cân nhắc trailing khi +5%.',
+        'Slow >> Fast (gap +2.47%) — KHÔNG exit sớm. '
+        '84% HK lên rồi rơi. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'WR sau 2 SL liên tiếp = 82% — không giảm size sau SL streak.',
         '🐢'
     ),
-    'PC1': (
+    'VCI': (
         'slow',
-        'Slow wins (WR slow=62% vs fast=35%) — kiên nhẫn là edge. '
-        '77% HK đã lên MFE+7.9% → trailing khi +5% có thể cứu nhiều lệnh.',
+        'Slow tốt hơn Fast (Exp slow=+1.83%). Hold full 10 phiên. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'WF 2/4 — monitor chặt, không add thêm.',
         '🐢'
     ),
-    'MCH': (
+    'VIX': (
         'slow',
-        'Slow wins (WR slow=52% vs fast=38%) — lệnh cần thời gian. '
-        '56% HK từng lên MFE+7.9% → trailing khi +5%.',
+        'Slow tốt hơn Fast. Hold full 10 phiên. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Vol LOW → 50% size (L2 soft filter).',
+        '🐢'
+    ),
+    'HHS': (
+        'fast',
+        'Fast resolver (Fast +3.42% vs Slow +2.57%). '
+        'Sau 6 phiên nếu MFE < +4% → xem xét exit, tái deploy vốn. '
+        'Skip VNI FLAT (Exp=-0.65% n=19L WF 3/4).',
+        '🚀'
+    ),
+    'QCG': (
+        'slow',
+        'Slow tốt hơn Fast. Hold full 10 phiên. '
+        'FLAT tốt nhất watchlist (+6.04%) — KHÔNG skip FLAT. '
+        'HK rate 13% thấp — exit clean, trailing ít cần thiết hơn. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%.',
+        '🐢'
+    ),
+
+    # ── Tier 2 ────────────────────────────────────────────────────────────────
+    'CTS': (
+        'slow',
+        'Slow >> Fast (Exp gap +2.17%). KHÔNG exit sớm. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Skip Vol LOW (Exp=-1.12% n=28L WF 4/4).',
         '🐢'
     ),
     'HAH': (
         'slow',
-        'Slow wins rõ (WR slow=61% vs fast=32%, Exp gap=+2.69%) — '
-        'KHÔNG exit sớm. 90% HK đã lên MFE+7.7% → trailing ưu tiên.',
+        'Slow tốt hơn Fast. KHÔNG exit sớm. '
+        '73% HK lên rồi rơi. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Skip Vol LOW (Exp=-0.58% n=26L WF 3/4).',
+        '🐢'
+    ),
+    'HTG': (
+        'slow',
+        'Slow tốt hơn Fast. Hold full 10 phiên. '
+        '68% HK lên rồi rơi — HK HEAVY. '
+        'Trailing AGGRESSIVE: MFE≥6% → move SL lên +3% ngay. '
+        'Skip Vol HIGH (Exp=-1.90% n=16L WF 3/4).',
+        '🐢'
+    ),
+    'LPB': (
+        'slow',
+        'TUYỆT ĐỐI không exit sớm — Fast Exp = -3.68% nguy hiểm nhất watchlist. '
+        'Hold full 10 phiên bắt buộc. '
+        'Trailing CHỈ khi MFE≥8% → SL tại +3%. '
+        'Skip Vol LOW (Exp=-1.05% n=34L WF 4/4).',
+        '🐢'
+    ),
+    'ORS': (
+        'fast',
+        'Fast resolver (ORS Fast +3.88% >> Slow +0.92%, gap +2.96%). '
+        'Sau 6 phiên nếu MFE < +4% → exit. '
+        'PAUSE sau 2 SL liên tiếp (WR sau 2 SL = 12%!). '
+        'Skip VNI FLAT (Exp=-2.12% n=17L WF 3/4).',
+        '🚀'
+    ),
+    'GIL': (
+        'slow',
+        'Slow tốt hơn Fast. Hold full 10 phiên. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Skip VNI FLAT (Exp=-1.21% n=17L WF 3/4). Cap 50% tổng.',
+        '🐢'
+    ),
+    'VDS': (
+        'slow',
+        'NGUY HIỂM nếu exit sớm — Fast Exp = -2.25%. '
+        '100% HK từng lên rồi rơi. Hold full 10 phiên bắt buộc. '
+        'Trailing CHỈ khi MFE≥8% → SL tại +3%. '
+        'Skip Vol MED + Score 75-84 (cả 2 WF 4/4 ROBUST).',
+        '🐢'
+    ),
+    'PC1': (
+        'slow',
+        'Slow >> Fast (gap +2.63%). Hold full 10 phiên. '
+        '79% HK lên rồi rơi. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'HIGH_VOL + NORM combo tốt nhất (+9.15%).',
+        '🐢'
+    ),
+    'HPG': (
+        'slow',
+        'Slow >> Fast mạnh (gap +5.00%, Fast = -2.83%). '
+        'Market-driven SL 85% — regime filter là ưu tiên cao nhất. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Skip VNI FLAT (pending WF).',
+        '🐢'
+    ),
+
+    # ── Tier 3 ────────────────────────────────────────────────────────────────
+    'FRT': (
+        'slow',
+        'Slow tốt hơn Fast. Hold full 10 phiên. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        '⚠ Max SL streak 11L — theo dõi chặt. Cap 50%.',
+        '🐢'
+    ),
+    'MCH': (
+        'slow',
+        'Slow >> Fast (gap +7.30%, Fast = -5.17%). KHÔNG exit sớm. '
+        'Signal risk 71% — entry quality là ưu tiên số 1. '
+        'Avoid FLAT+NORM entry combo (Exp=-1.95%). '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%.',
         '🐢'
     ),
     'DGC': (
-        'slow',
-        'Slow wins mạnh (Exp slow=+1.44% vs fast=-1.20%) — '
-        'lệnh resolve chậm mới có edge. Đừng bị nhiễu bởi lình xình đầu.',
-        '🐢'
-    ),
-    'NKG': (
-        'slow',
-        'Slow wins (WR slow=56% vs fast=48%, Exp gap=+1.07%) — '
-        'giữ đủ hold. 85% HK đã lên MFE+6.1% → trailing khi +4%.',
-        '🐢'
-    ),
-    'CTS': (
-        'slow',
-        'Slow wins (WR slow=59% vs fast=41%, Exp gap=+1.31%) — '
-        'kiên nhẫn với mã này. Hold đủ ngưỡng, không cut sớm.',
-        '🐢'
+        'fast',
+        'FAST resolver DUY NHẤT trong watchlist (Fast > Slow). '
+        'Sau 6 phiên nếu MFE < +4% → EXIT ngay, tái deploy vốn. '
+        '92% HK lên rồi rơi — exit clean. '
+        'Trailing: MFE≥6% → BE stop (không chờ 8%). '
+        'Skip DOWN + HIGH_VOL. MA20 BELOW = tử huyệt.',
+        '🚀'
     ),
     'VND': (
         'slow',
-        'Slow wins cực rõ (Exp slow=+2.08% vs fast=-1.85%) — '
-        'KHÔNG exit sớm dù lình xình. Slow pattern mạnh nhất watchlist.',
+        'Slow >> Fast cực rõ (Exp slow=+3.24% vs Fast=-4.00%). '
+        'KHÔNG exit sớm dù lình xình. '
+        'Trailing: MFE≥6% → BE stop | MFE≥8% → SL tại +3%. '
+        'Skip VNI FLAT (WF 4/4). ⚠ WF symbol 1/4 — monitor.',
         '🐢'
-    ),
-    'FRT': (
-        'fast',
-        'Fast wins (WR fast=58% vs slow=48%, Exp gap=+1.89%) — '
-        'breakout mã: nếu sau 4 phiên MFE<+3% thì xem xét exit. '
-        'Lệnh tốt resolve nhanh.',
-        '🚀'
-    ),
-    'SSI': (
-        'neutral',
-        'Không có pattern rõ fast/slow (Exp gap chỉ 0.19%) — '
-        'hold theo kế hoạch, không cần điều chỉnh timing.',
-        '➡'
     ),
 }
 
@@ -276,7 +369,7 @@ TRADE_PERSONALITY = {
 def _fmt_trade_personality(sym, hold_days):
     """
     Format trade personality note ngắn gọn cho /signals output.
-    Trả về string 1-2 dòng.
+    S23: thêm MFE trailing trigger summary.
     """
     p = TRADE_PERSONALITY.get(sym)
     if not p:
@@ -285,9 +378,9 @@ def _fmt_trade_personality(sym, hold_days):
     NL = chr(10)
 
     if pattern == 'slow':
-        header = f'{emoji} <b>Hold style: PATIENT</b> — giữ đủ {hold_days}d'
+        header = f'{emoji} <b>Hold style: PATIENT</b> — hold đủ {hold_days}d, không exit sớm'
     elif pattern == 'fast':
-        header = f'{emoji} <b>Hold style: BREAKOUT</b> — resolve trong 4p hoặc exit'
+        header = f'{emoji} <b>Hold style: FAST RESOLVER</b> — check MFE sau 6 phiên'
     else:
         header = f'{emoji} <b>Hold style: NEUTRAL</b> — hold theo kế hoạch {hold_days}d'
 
@@ -7724,20 +7817,47 @@ _EXPLORE_NOTES = {
 # Rules chỉ áp dụng khi có evidence rõ (n≥15L, Exp < -0.5%)
 # Format: {cond: threshold, 'reason': str, 'exp': float, 'n': int}
 _BF_CONTEXT_RULES = {
-    # VNI FLAT (vni_chg trong [-2%, +1%)) → nhiều mã xấu
-    'HAH':  [{'cond': 'vni_flat', 'reason': 'HAH VNI FLAT: Exp=-1.54% WR=37% n=19L'}],
-    'CTS':  [{'cond': 'vni_flat', 'reason': 'CTS VNI FLAT: Exp=-1.33% WR=33% n=21L'},
-             {'cond': 'vol_low',  'reason': 'CTS Vol LOW: Exp=-1.12% WR=39% n=28L'}],
-    # Vol MED (vol_ratio 1.2–2.0) → nguy hiểm PC1, NKG
-    'PC1':  [{'cond': 'vol_med',  'reason': 'PC1 Vol MED: Exp=-2.28% WR=24% n=25L'}],
-    'NKG':  [{'cond': 'vol_med',  'reason': 'NKG Vol MED: Exp=-1.92% WR=35% n=26L'},
-             {'cond': 'score_low','reason': 'NKG Score<75: Exp=-3.68% WR=24% n=17L'}],
-    # SSI MA20 OPT → bẫy lớn nhất
-    'SSI':  [{'cond': 'ma20_opt', 'reason': 'SSI MA20 OPT: Exp=-1.02% WR=29% n=24L'}],
-    # FRT VNI DOWN đã có trong _PER_SYMBOL_RULES → không duplicate
-    # Mã mới S20 — từ /scabt raw analysis (RAW confirm)
-    # VCI: FLAT -0.14% n=16L, LOW +0.72% n=20L — chưa đủ evidence, không implement
-    'HPG':  [{'cond': 'vni_flat', 'reason': 'HPG VNI FLAT: Exp=-0.64% WR=46% n=22L (RAW confirm)'}],
+    # ══════════════════════════════════════════════════════════════════════════
+    # S23 (19/04/2026): Sync đầy đủ từ Score A BT Combined Report S22
+    # Chỉ implement rule khi: n≥15L + WF ROBUST (avg ΔOOS≥0.3%, OOS+≥3/4 folds)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── Từ S20 — đã implement, giữ nguyên ────────────────────────────────────
+    # HAH: rule cũ vni_flat → xóa (data S20 n=19L chưa đủ WF ROBUST)
+    #      thay bằng vol_low đúng từ BT S22 (n=26L WF 3/4 ROBUST)
+    'HAH':  [{'cond': 'vol_low',      'reason': 'HAH Vol LOW: Exp=-0.58% WR=42% n=26L WF 3/4 ROBUST'}],
+    # CTS: xóa rule vni_flat cũ (không có trong BT S22), giữ vol_low
+    'CTS':  [{'cond': 'vol_low',      'reason': 'CTS Vol LOW: Exp=-1.12% WR=39% n=28L WF 4/4 ROBUST'}],
+    # PC1: thêm score_95plus (mới S22)
+    'PC1':  [{'cond': 'vol_med',      'reason': 'PC1 Vol MED: Exp=-2.28% WR=24% n=25L WF 4/4 ROBUST'},
+             {'cond': 'score_95plus', 'reason': 'PC1 Score 95+: Exp=-0.89% WR=40% n=30L WF 4/4 ROBUST'}],
+    # VND: giữ nguyên
+    'VND':  [{'cond': 'vni_flat',     'reason': 'VND VNI FLAT: Exp=-1.31% WR=42% n=24L WF 4/4 ROBUST'}],
+    # HPG: giữ vni_flat (pending WF confirm), CLIMAX pending n<15
+    'HPG':  [{'cond': 'vni_flat',     'reason': 'HPG VNI FLAT: Exp=-0.06% n=25L WF pending — monitor'},
+             {'cond': 'climax_vol',   'reason': 'HPG CLIMAX_VOL: Exp=-2.65% n=14L ⚠ pending WF (n<15)'}],
+
+    # ── Mới S21 — patch lần này ───────────────────────────────────────────────
+    'HHS':  [{'cond': 'vni_flat',     'reason': 'HHS VNI FLAT: Exp=-0.65% WR=42% n=19L WF 3/4 ROBUST'}],
+    'ORS':  [{'cond': 'vni_flat',     'reason': 'ORS VNI FLAT: Exp=-2.12% WR=29% n=17L WF 3/4 ROBUST'}],
+    'GIL':  [{'cond': 'vni_flat',     'reason': 'GIL VNI FLAT: Exp=-1.21% WR=35% n=17L WF 3/4 ROBUST'}],
+    'LPB':  [{'cond': 'vol_low',      'reason': 'LPB Vol LOW: Exp=-1.05% WR=29% n=34L WF 4/4 ROBUST'}],
+    'VDS':  [{'cond': 'vol_med',      'reason': 'VDS Vol MED: Exp=-1.04% WR=40% n=25L WF 3/4 ROBUST'},
+             {'cond': 'score_75_84',  'reason': 'VDS Score 75-84: Exp=-1.56% WR=27% n=15L WF 4/4 ROBUST'}],
+
+    # ── Mới S22 — patch lần này ───────────────────────────────────────────────
+    'HTG':  [{'cond': 'vol_high',     'reason': 'HTG Vol HIGH: Exp=-1.90% WR=38% n=16L WF 3/4 ROBUST'}],
+
+    # ── Không có rule ─────────────────────────────────────────────────────────
+    # QCG: không skip FLAT (FLAT tốt nhất +6.04% — DUY NHẤT ngược trend). Không có bucket âm đủ điều kiện.
+    # STB: không skip FLAT (FLAT +2.35% tốt). WR sau 2 SL = 82% → không điều chỉnh.
+    # VIX: soft L2 (Vol LOW → 50% size) xử lý bằng POSITION_SIZE_CAPS, không phải skip cứng
+    # FRT: avoid HIGH+LOW vol — xử lý trong _PER_SYMBOL_RULES
+    # MCH: skip VNI DOWN — xử lý trong _PER_SYMBOL_RULES
+    # DGC: skip DOWN+HIGH_VOL — xử lý trong _PER_SYMBOL_RULES
+
+    # ── Đã xóa (không còn watchlist) ─────────────────────────────────────────
+    # NKG, SSI: loại khỏi SIGNALS_WATCHLIST → xóa rules
 }
 
 def _check_bf_context(sym, item, vni_chg_pct):
@@ -7778,6 +7898,22 @@ def _check_bf_context(sym, item, vni_chg_pct):
         elif cond == 'vol_med':
             if 1.2 <= vol_ratio < 2.0:
                 return True, rule['reason'] + f' (vol={vol_ratio:.1f}x)'
+        elif cond == 'vol_high':
+            # S23: HTG skip Vol HIGH — vol_ratio >= 2.0
+            if vol_ratio >= 2.0:
+                return True, rule['reason'] + f' (vol={vol_ratio:.1f}x)'
+        elif cond == 'score_95plus':
+            # S23: PC1 skip Score 95+ — bucket âm WF 4/4 ROBUST
+            if score >= 95:
+                return True, rule['reason'] + f' (score={score})'
+        elif cond == 'score_75_84':
+            # S23: VDS skip Score 75-84 — bucket âm WF 4/4 ROBUST
+            if 75 <= score <= 84:
+                return True, rule['reason'] + f' (score={score})'
+        elif cond == 'climax_vol':
+            # S23: HPG CLIMAX_VOL pending (n=14L < 15 → chưa enforce, chỉ log)
+            # Implement khi n đủ sau monitor live
+            pass
         elif cond == 'score_low':
             if score < 75:
                 return True, rule['reason'] + f' (score={score})'
