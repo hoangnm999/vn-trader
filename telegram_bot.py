@@ -387,6 +387,202 @@ def _fmt_trade_personality(sym, hold_days):
     return NL + ' ' + header + NL + ' <i>' + note + '</i>'
 
 
+def _fmt_setup_quality(sym, score, vni_chg, vol_ratio, ma20_dist, bf_active, source='ScoreA'):
+    """
+    Tính setup quality score 0-5 và context dots.
+    Dùng chung cho ScoreA / ScB / ML.
+    Trả về (score_int, verdict_str, context_lines_str)
+    """
+    NL = chr(10)
+    pts = 0
+    ctx = []
+
+    # 1. Score bucket có Exp dương (từ BT data per-symbol)
+    if source == 'ScoreA':
+        tp = TRADE_PERSONALITY.get(sym)
+        # Dùng score bucket để check — bucket sweet spot thường >=75
+        if score >= 85:
+            pts += 1
+            ctx.append('✅ Score 85+ — sweet spot lịch sử')
+        elif score >= 75:
+            pts += 1
+            ctx.append('✅ Score 75-84 — trong vùng hợp lệ')
+        else:
+            ctx.append('⚠ Score 65-74 — biên dưới, cân nhắc')
+    else:
+        # ScB / ML — score context đơn giản hơn
+        if score >= 85:
+            pts += 1; ctx.append('✅ Score A cao (≥85)')
+        elif score >= 65:
+            pts += 1; ctx.append('✅ Score A đạt ngưỡng')
+        else:
+            ctx.append('⚠ Score A thấp')
+
+    # 2. VNI regime
+    if vni_chg >= 1.0:
+        pts += 1; ctx.append('✅ VNI UP — market thuận chiều')
+    elif -2.0 <= vni_chg < 1.0:
+        ctx.append('⚠ VNI FLAT — thị trường sideways')
+    else:
+        ctx.append('❌ VNI DOWN — market ngược chiều')
+
+    # 3. Vol zone
+    if 0.8 <= vol_ratio < 2.0:
+        pts += 1; ctx.append(f'✅ Vol {vol_ratio:.1f}x — vùng NORMAL/HIGH tối ưu')
+    elif vol_ratio >= 2.0:
+        ctx.append(f'⚠ Vol {vol_ratio:.1f}x — quá cao, CLIMAX risk')
+    else:
+        ctx.append(f'⚠ Vol {vol_ratio:.1f}x — LOW, thanh khoản yếu')
+
+    # 4. MA20 zone
+    if ma20_dist is not None:
+        if 2.0 <= ma20_dist <= 10.0:
+            pts += 1; ctx.append(f'✅ MA20 +{ma20_dist:.1f}% — OK zone (2-10%)')
+        elif ma20_dist > 10.0:
+            ctx.append(f'⚠ MA20 +{ma20_dist:.1f}% — EXT, đã đi xa')
+        elif 0 <= ma20_dist < 2.0:
+            ctx.append(f'⚠ MA20 +{ma20_dist:.1f}% — NEAR, sát kháng cự')
+        else:
+            ctx.append(f'❌ MA20 {ma20_dist:.1f}% — dưới MA20')
+
+    # 5. Không có BF context filter active
+    if not bf_active:
+        pts += 1; ctx.append('✅ Không có BF filter — signal sạch')
+    else:
+        ctx.append('⚠ BF filter active — xem cảnh báo bên dưới')
+
+    # Verdict
+    if pts >= 5:
+        verdict = f'{pts}/5 — setup tốt nhất'
+    elif pts >= 4:
+        verdict = f'{pts}/5 — tốt, vào được'
+    elif pts >= 3:
+        verdict = f'{pts}/5 — chấp nhận được, cân nhắc size'
+    else:
+        verdict = f'{pts}/5 — yếu, thận trọng'
+
+    ctx_str = NL.join('  ' + c for c in ctx)
+    return pts, verdict, ctx_str
+
+
+def _fmt_buy_card(sym, price, score, action,
+                  sl_pct, tp_pct, hold_days, size_cap,
+                  vni_chg, vol_ratio, ma20_dist,
+                  bf_active=False, bf_reason='',
+                  source='ScoreA',
+                  bt_wr=None, bt_pf=None, bt_n=None,
+                  extra_notes='', score_b=None, ml_grade=None):
+    """
+    Format buy signal card đầy đủ cho Telegram (HTML text).
+    Dùng chung ScoreA / ScB / ML.
+    Trả về string message sẵn sàng gửi.
+
+    S23: Unified buy card format — thay thế format cũ dàn trải.
+    """
+    NL = chr(10)
+    SEP  = '━' * 17
+    SEP2 = '─' * 17
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    src_label = {'ScoreA': 'Score A', 'ScB': 'Score B', 'ML': 'ML Momentum'}.get(source, source)
+    src_icon  = {'ScoreA': '📈', 'ScB': '📊', 'ML': '🤖'}.get(source, '📈')
+
+    score_disp = f'Score A {score}/100'
+    if score_b is not None:
+        score_disp += f' · ScB {score_b}/100'
+    if ml_grade is not None:
+        score_disp += f' · ML {ml_grade}'
+
+    header = f'{src_icon} <b>{sym} — MUA</b>  [{src_label}]\n{score_disp}\n'
+
+    # ── Setup quality ─────────────────────────────────────────────────────────
+    sq_pts, sq_verdict, sq_ctx = _fmt_setup_quality(
+        sym, score, vni_chg, vol_ratio, ma20_dist, bf_active, source
+    )
+    setup_bar = '■' * sq_pts + '□' * (5 - sq_pts)
+    setup_line = f'<b>Setup [{setup_bar}] {sq_verdict}</b>\n'
+
+    # ── Giá / SL / TP ─────────────────────────────────────────────────────────
+    sl_price = round(price * (1 - sl_pct / 100))
+    tp_price = round(price * (1 + tp_pct / 100))
+    rr       = round(tp_pct / sl_pct, 1)
+
+    size_txt = 'FULL' if size_cap >= 1.0 else f'{int(size_cap*100)}%'
+
+    price_block = (
+        f'<b>Vào lệnh:</b>  T+1 ATO ~{price:,.0f}đ\n'
+        f'<b>Stop loss:</b>  {sl_price:,.0f}đ  (−{sl_pct}%)\n'
+        f'<b>Take profit:</b> {tp_price:,.0f}đ (+{tp_pct}%) · R:R = 1:{rr}\n'
+        f'<b>Hold:</b> {hold_days} ngày GD · <b>Size:</b> {size_txt}'
+    )
+
+    # ── Context ───────────────────────────────────────────────────────────────
+    ctx_block = f'{SEP2}\n<b>Context:</b>\n{sq_ctx}'
+
+    # ── Strategy theo dõi ────────────────────────────────────────────────────
+    tp_p = TRADE_PERSONALITY.get(sym)
+    if tp_p:
+        pattern, hold_note, _ = tp_p
+        if pattern == 'fast':
+            strategy = (
+                f'▸ D1–3: theo dõi tiến triển sớm\n'
+                f'▸ D4–6: MFE &lt;+4% → xem xét exit (fast resolver)\n'
+                f'▸ D4+:  MFE ≥6% → move SL lên breakeven\n'
+                f'▸ Expire: đóng cuối D{hold_days}'
+            )
+        else:
+            # Slow — check nếu là HK heavy (HTG)
+            trailing_trigger = '6%' if sym == 'HTG' else '6%'
+            trailing_action  = '+3% ngay' if sym == 'HTG' else 'breakeven'
+            strategy = (
+                f'▸ D1–3: không can thiệp, slow profile\n'
+                f'▸ D4+:  MFE ≥{trailing_trigger} → SL lên {trailing_action}\n'
+                f'▸ D7+:  MFE ≥8% → SL lên +3%\n'
+                f'▸ Expire: đóng cuối D{hold_days}'
+            )
+    else:
+        strategy = (
+            f'▸ Hold {hold_days} ngày GD\n'
+            f'▸ MFE ≥6% → SL lên breakeven\n'
+            f'▸ MFE ≥8% → SL lên +3%'
+        )
+
+    strategy_block = f'{SEP2}\n<b>Theo dõi lệnh:</b>\n{strategy}'
+
+    # ── BF warning ───────────────────────────────────────────────────────────
+    bf_block = ''
+    if bf_active and bf_reason:
+        bf_block = f'\n⚠ <b>BF filter:</b> {bf_reason}'
+
+    # ── Extra notes (per-symbol advisory) ────────────────────────────────────
+    extra_block = f'\n💡 {extra_notes}' if extra_notes else ''
+
+    # ── Stats footer ─────────────────────────────────────────────────────────
+    stats_parts = []
+    if bt_wr is not None: stats_parts.append(f'WR {bt_wr}%')
+    if bt_pf is not None: stats_parts.append(f'PF {bt_pf}')
+    if bt_n  is not None: stats_parts.append(f'n={bt_n}L')
+    stats_line = ' · '.join(stats_parts)
+    footer = f'<i>{stats_line}</i>' if stats_line else ''
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    msg = (
+        SEP + NL
+        + header
+        + setup_line
+        + SEP2 + NL
+        + price_block + NL
+        + ctx_block + NL
+        + strategy_block
+        + bf_block
+        + extra_block + NL
+        + SEP2 + NL
+        + footer + NL
+        + SEP
+    )
+    return msg
+
+
 WATCHLIST_META = {}
 for _sym in SIGNALS_WATCHLIST:
     _cfg = SYMBOL_CONFIG.get(_sym, {})
@@ -1548,7 +1744,6 @@ def handle_mlscan(mode, chat_id):
         p52   = ms.get('pct52w', 0)
         pens  = ms.get('penalties', [])
         pen   = ' &#x26A0;' if pens else ''
-        # Badge xác nhận backtest
         ml_cfg = ML_CONFIRMED_WATCHLIST.get(sym)
         if ml_cfg:
             badge = ' &#x2705;' if ml_cfg[0] == 'A' else ' &#x1F7E1;'
@@ -1561,31 +1756,67 @@ def handle_mlscan(mode, chat_id):
                     f' | {r["price"]:,.0f}đ{pen}')
         return f'  <b>{sym}</b>{badge}: {score}/120 | 52W:{p52:.0f}%{pen}'
 
+    def _buy_card_ml(r):
+        """Tạo buy card đầy đủ cho ML STRONG/PASS signal."""
+        sym    = r['sym']
+        ms     = r['ms'] or {}
+        price  = float(r.get('price', 0) or 0)
+        score_a= int(r.get('score_a', 50) or 50)
+        grade  = ms.get('grade', 'PASS')
+        ml_score = ms.get('score', 0)
+        ml_cfg = ML_CONFIRMED_WATCHLIST.get(sym, {})
+        bt_wr  = None; bt_pf = None
+        if ml_cfg and len(ml_cfg) >= 2:
+            # ml_cfg = (tier, sl_pct, tp_pct, hold_days, note)
+            bt_note = ml_cfg[4] if len(ml_cfg) > 4 else ''
+            # Parse WR từ note string nếu có
+            try:
+                import re
+                wr_m = re.search(r'WR=(\d+)', bt_note)
+                pf_m = re.search(r'PF=([\d.]+)', bt_note)
+                if wr_m: bt_wr = int(wr_m.group(1))
+                if pf_m: bt_pf = float(pf_m.group(1))
+            except Exception:
+                pass
+        pens = ms.get('penalties', [])
+        extra = f'ML {grade} {ml_score}/120'
+        if pens: extra += ' | ⚠ ' + ' | '.join(pens[:2])
+        return _fmt_buy_card(
+            sym=sym, price=price, score=score_a, action='MUA',
+            sl_pct=6, tp_pct=17, hold_days=18, size_cap=1.0,
+            vni_chg=0, vol_ratio=ms.get('vol_ratio', 1.0) if hasattr(ms, 'get') else 1.0,
+            ma20_dist=0,
+            bf_active=False, bf_reason='',
+            source='ML', ml_grade=grade,
+            bt_wr=bt_wr, bt_pf=bt_pf, bt_n=None,
+            extra_notes=extra,
+        )
+
     parts = []
     if results['strong']:
-        parts.append(
-            '&#x1F525; <b>STRONG LEADER</b> ≥90đ — '
-            + str(len(results['strong'])) + ' mã' + NL
-            + NL.join(_row(r) for r in results['strong'])
-        )
+        strong_header = f'🔥 <b>STRONG LEADER</b> ≥90đ — {len(results["strong"])} mã'
+        send(strong_header, chat_id)
+        for r in results['strong']:
+            send(_buy_card_ml(r), chat_id)
     if results['pass_']:
         rows   = results['pass_'][:8]
         suffix = (NL + f'  <i>+ {len(results["pass_"])-8} mã nữa...</i>'
                   if len(results['pass_']) > 8 else '')
-        parts.append(
-            '&#x1F4C8; <b>PASS</b> 75-89đ — '
-            + str(len(results['pass_'])) + ' mã' + NL
-            + NL.join(_row(r) for r in rows) + suffix
-        )
+        pass_header = f'📈 <b>PASS</b> 75-89đ — {len(results["pass_"])} mã'
+        send(pass_header, chat_id)
+        for r in rows:
+            send(_buy_card_ml(r), chat_id)
+        if suffix:
+            send(suffix, chat_id)
     if results['near']:
-        parts.append(
-            '&#x1F7E1; <b>NEAR MISS</b> 60-74đ — '
-            + str(len(results['near'])) + ' mã' + NL
+        near_msg = (
+            '🟡 <b>NEAR MISS</b> 60-74đ — ' + str(len(results['near'])) + ' mã' + NL
             + NL.join(_row(r, detail=False) for r in results['near'][:5])
         )
-    if not parts:
+        parts.append(near_msg)
+    if not results['strong'] and not results['pass_'] and not results['near']:
         parts.append(
-            '&#x26AA; Không có mã nào qua Tier 1' + NL
+            '⚪ Không có mã nào qua Tier 1' + NL
             + f'({len(results["fail_t1"])} mã bị lọc — Price≤MA50 hoặc Vol&lt;1.2x)' + NL
             + '<i>Thị trường yếu — chờ breakout.</i>'
         )
@@ -1848,35 +2079,50 @@ def _scb_format_signal(sym, score_a, score_b, vni_chg, ma20_dist, vol_ratio):
         premiums.append('🛡 CSV Defensive — tốt khi thị trường yếu')
 
     # ── Build message ─────────────────────────────────────────────────────────
-    vni_icon  = '✅' if vni_regime == 'UP' else '⚠'
-    vol_icon  = '✅' if vol_pat == 'MED' else ('⚠' if vol_pat in ('LOW', 'HIGH') else '·')
-    ma20_icon = '✅' if ma20_zone == 'OPT' else ('🌟' if ma20_zone == 'EXT' else '·')
-
-    size_note = ('| Full size'   if tier == 'A' and sym != 'ORS'
-                 else '| 70% size' if sym == 'ORS'
-                 else '| ⚠ Half size')
-
-    wf_line = ''
-    if wf:
-        worst_str = (f'+{wf["worst"]:.2f}%' if wf['worst'] >= 0 else f'{wf["worst"]:.2f}%')
-        wf_line = (NL + f'WF: {wf["wf"]} | Median OOS: +{wf["median"]:.2f}% | Worst: {worst_str}')
-
-    note_str    = (NL + NL.join(notes))    if notes    else ''
-    premium_str = (NL + NL.join(premiums)) if premiums else ''
-    verdict_str = '→ ✅ ĐỦ ĐIỀU KIỆN' if verdict == 'GO' else '→ ⚠ VÀO NHỎ HOẶC CHỜ'
-
-    msg = (
-        f'📊 <b>ScB SIGNAL — {sym}</b> | Tier {tier} {size_note}' + NL
-        + f'ScA: <b>{score_a}</b> | ScB: <b>{score_b}</b>'
-        + f' | WR: {bt.get("wr","?")}% | Exp: +{bt.get("exp","?")}% | PF: {bt.get("pf","?")}'
-        + wf_line + NL
-        + f'VNI: {vni_icon} {vni_regime} ({vni_chg:+.1f}%)'
-        + f' | Vol: {vol_icon} {vol_pat} ({vol_ratio:.1f}x)'
-        + f' | MA20: {ma20_icon} {ma20_zone} {ma20_dist:+.1f}%'
-        + note_str
-        + premium_str + NL
-        + f'<b>{verdict_str}</b>'
-    )
+    if verdict == 'GO':
+        # Dùng unified buy card
+        size_cap = 1.0 if (tier == 'A' and sym != 'ORS') else (0.7 if sym == 'ORS' else 0.5)
+        extra = []
+        if premiums: extra += premiums
+        if notes:    extra += notes
+        msg = _fmt_buy_card(
+            sym=sym, price=0, score=score_a, action='MUA',
+            sl_pct=7, tp_pct=14, hold_days=10, size_cap=size_cap,
+            vni_chg=vni_chg, vol_ratio=vol_ratio, ma20_dist=ma20_dist,
+            bf_active=False, bf_reason='',
+            source='ScB', score_b=score_b,
+            bt_wr=bt.get('wr'), bt_pf=bt.get('pf'), bt_n=None,
+            extra_notes=' | '.join(extra) if extra else '',
+        )
+        # Thêm WF line vào footer nếu có
+        if wf:
+            worst_str = f'+{wf["worst"]:.2f}%' if wf['worst'] >= 0 else f'{wf["worst"]:.2f}%'
+            msg += f'\n<i>WF: {wf["wf"]} | Median OOS: +{wf["median"]:.2f}% | Worst: {worst_str}</i>'
+    else:
+        # CAUTION — format gọn hơn (giữ format cũ)
+        vni_icon  = '✅' if vni_regime == 'UP' else '⚠'
+        vol_icon  = '✅' if vol_pat == 'MED' else ('⚠' if vol_pat in ('LOW', 'HIGH') else '·')
+        ma20_icon = '✅' if ma20_zone == 'OPT' else ('🌟' if ma20_zone == 'EXT' else '·')
+        size_note = ('| Full size'   if tier == 'A' and sym != 'ORS'
+                     else '| 70% size' if sym == 'ORS'
+                     else '| ⚠ Half size')
+        wf_line = ''
+        if wf:
+            worst_str = (f'+{wf["worst"]:.2f}%' if wf['worst'] >= 0 else f'{wf["worst"]:.2f}%')
+            wf_line = (NL + f'WF: {wf["wf"]} | Median OOS: +{wf["median"]:.2f}% | Worst: {worst_str}')
+        note_str    = (NL + NL.join(notes))    if notes    else ''
+        premium_str = (NL + NL.join(premiums)) if premiums else ''
+        msg = (
+            f'📊 <b>ScB — {sym}</b> ⚠ CAUTION | Tier {tier} {size_note}' + NL
+            + f'ScA: <b>{score_a}</b> | ScB: <b>{score_b}</b>'
+            + f' | WR: {bt.get("wr","?")}% | Exp: +{bt.get("exp","?")}% | PF: {bt.get("pf","?")}'
+            + wf_line + NL
+            + f'VNI: {vni_icon} {vni_regime} ({vni_chg:+.1f}%)'
+            + f' | Vol: {vol_icon} {vol_pat} ({vol_ratio:.1f}x)'
+            + f' | MA20: {ma20_icon} {ma20_zone} {ma20_dist:+.1f}%'
+            + note_str + premium_str + NL
+            + '<b>→ ⚠ VÀO NHỎ HOẶC CHỜ</b>'
+        )
     return verdict, msg
 
 
@@ -8762,17 +9008,19 @@ def handle_signals(chat_id):
                     if action == 'MUA':
                         _personality_line = _fmt_trade_personality(sym, _hold_d)
 
-                    msg += (
-                        ae + ' <b>' + sym + '</b> — <b>' + action + '</b> (' + str(score) + '/100)\n'
-                        + meta_line
-                        + score_note
-                        + ' Giá: ' + f'{p:,.0f}' + 'd  RSI: ' + str(item.get('rsi', 0)) + '\n'
-                        + ' ' + vb + ' Vol: ' + f'{vr:.1f}' + 'x  ' + is_ + '\n'
-                        + (' HT: ' + f'{sups[0]["price"]:,.0f}' if sups else '')
-                        + (' KC: ' + f'{ress[0]["price"]:,.0f}' if ress else '') + '\n'
-                        + div_txt + tio_txt + entry_warn + _ps_note_txt
-                        + _sc_line + _personality_line + '\n\n'
-                    )
+                    msg += _fmt_buy_card(
+                        sym=sym, price=p, score=score_adj, action=action,
+                        sl_pct=meta['sl'], tp_pct=meta['tp'],
+                        hold_days=_hold_d, size_cap=_size_cap,
+                        vni_chg=(_vni_chg_today or 0),
+                        vol_ratio=float(item.get('vol_ratio', 1.0) or 1.0),
+                        ma20_dist=float(item.get('dist_ma20_pct') or 0),
+                        bf_active=_bf_skip, bf_reason=_bf_reason,
+                        source='ScoreA',
+                        bt_wr=None, bt_pf=int(meta.get('tp',14)/meta.get('sl',7)*10)/10,
+                        bt_n=None,
+                        extra_notes=(' | '.join(_ps_notes) if _ps_notes else ''),
+                    ) + NL
                     if action == 'MUA':
                         buy_symbols.append({'symbol': sym, 'score': score})
                         item['_meta'] = meta
@@ -8793,25 +9041,13 @@ def handle_signals(chat_id):
                                 logger.info(f'Paper trade added: {sym} @{p} score={score} '
                                             f'sc_grade={_sc_grade}')
     
-            # Mã bị lọc vì score chưa đủ hoặc bucket skip
+            # Mã chưa đủ điểm — gọn 1 dòng
             if skipped:
-                msg += '&#x23F3; <b>Cho ngưỡng score:</b>\n'
+                skip_parts = []
                 for row in skipped:
-                    sym, sc, min_sc, meta = row[0], row[1], row[2], row[3]
-                    sc_adj      = row[4] if len(row) > 4 else sc
-                    b_warns     = row[5] if len(row) > 5 else []
-                    bucket_skip = row[6] if len(row) > 6 else None
-                    if bucket_skip:
-                        # Session 10: hiển thị lý do bucket anomaly (VND 75-84)
-                        msg += (f' &#x26A0; {sym} ({meta["group"]}): '
-                                f'Score={sc_adj} — {bucket_skip} (data-driven, Exp âm)\n')
-                    elif sc_adj < sc:
-                        msg += (f' ⚠ {sym} ({meta["group"]}): '
-                                f'Score={sc}-{sc-sc_adj}={sc_adj} (can &gt;={min_sc}) '
-                                f'[{", ".join(b_warns)}]\n')
-                    else:
-                        msg += f' &#x1F4CC; {sym} ({meta["group"]}): Score={sc} (can &gt;={min_sc})\n'
-                msg += '\n'
+                    sym_s = row[0]; sc_s = row[4] if len(row) > 4 else row[1]
+                    skip_parts.append(f'{sym_s} ({sc_s}/100)')
+                msg += '👀 <b>Theo dõi:</b> ' + ' · '.join(skip_parts) + NL + NL
     
             # ── BUG-08 FIX: Tính breadth TRƯỚC khi send(msg) ─────────────────────────
             if wl_signals:
