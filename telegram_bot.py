@@ -444,12 +444,24 @@ def _add_paper_trade(symbol, price, score, sl_pct, tp_pct,
     (ML alert + ScB alert) gọi đồng thời → duplicate ID hoặc ghi đè nhau.
     ID dùng timestamp-microsecond thay vì len() để đảm bảo unique kể cả
     khi 2 lệnh vào cùng giây.
+
+    FIX (S23): Chặn ghi lệnh vào T7/CN/ngày lễ — paper trade chỉ hợp lệ
+    trong ngày giao dịch TTCK Việt Nam (T2-T6, không phải ngày lễ).
     """
     import time as _time
     with _paper_lock:
+        # ── Guard: chỉ cho phép ghi lệnh vào ngày giao dịch hợp lệ ─────────
+        now_vn  = datetime.now(VN_TZ)
+        today   = now_vn.strftime('%Y-%m-%d')
+        if now_vn.weekday() >= 5:
+            logger.info(f'_add_paper_trade SKIP (weekend): {symbol} [{source}] {today}')
+            return False, f'Không phải ngày giao dịch (T7/CN): {today}'
+        if today in _get_vn_holidays():
+            logger.info(f'_add_paper_trade SKIP (holiday): {symbol} [{source}] {today}')
+            return False, f'Ngày lễ TTCK: {today}'
+
         data = _load_paper()
         # Tránh trùng lệnh cùng source trong cùng 1 ngày
-        today = datetime.now(VN_TZ).strftime('%Y-%m-%d')
         existing = [t for t in data['trades']
                     if t['symbol'] == symbol and t['entry_date'] == today
                     and t['status'] == 'OPEN' and t.get('source', 'ScoreA') == source]
@@ -506,15 +518,24 @@ def _update_paper_trades():
       4. Settlement chưa qua: bỏ qua (chưa được phép bán)
 
     FIX (S16): Đây là hàm thiếu khiến /ptreport luôn báo closed:0.
-    Paper trades không bao giờ close nếu không có hàm này.
+    FIX (S23): Không chạy vào T7/CN/ngày lễ — giá không update, close sẽ sai.
+               Giá T7/CN giữ nguyên giá T6 → không phản ánh thực tế.
     """
+    now_vn  = datetime.now(VN_TZ)
+    today   = now_vn.strftime('%Y-%m-%d')
+
+    # Guard: không update giá vào cuối tuần hoặc ngày lễ
+    if now_vn.weekday() >= 5 or today in _get_vn_holidays():
+        logger.info(f'_update_paper_trades SKIP: không phải ngày GD ({today} weekday={now_vn.weekday()})')
+        return 0
+
     with _paper_lock:
         data = _load_paper()
         open_trades = [t for t in data['trades'] if t.get('status') == 'OPEN']
         if not open_trades:
             return 0
 
-        today = datetime.now(VN_TZ).strftime('%Y-%m-%d')
+        # today đã được set ở trên (trước guard weekend)
         closed_count = 0
 
         # Nhóm theo symbol để gọi API một lần/symbol
@@ -598,56 +619,57 @@ def _update_paper_trades():
     return closed_count
 
 
+def _get_vn_holidays():
+    """
+    Trả về set ngày lễ TTCK Việt Nam (T2-T6 nghỉ giao dịch).
+    Dùng chung cho _trading_days_after và _add_paper_trade.
+    """
+    return {
+        # 2024
+        '2024-01-01',
+        '2024-02-08', '2024-02-09', '2024-02-12', '2024-02-13',
+        '2024-02-14', '2024-02-15', '2024-02-16',
+        '2024-04-18',
+        '2024-04-29', '2024-04-30',
+        '2024-05-01',
+        '2024-09-02', '2024-09-03',
+        # 2025
+        '2025-01-01',
+        '2025-01-27', '2025-01-28', '2025-01-29',
+        '2025-01-30', '2025-01-31', '2025-02-03',
+        '2025-04-07',
+        '2025-04-30', '2025-05-01', '2025-05-02',
+        '2025-09-01', '2025-09-02',
+        # 2026
+        '2026-01-01', '2026-01-02',
+        '2026-02-16', '2026-02-17', '2026-02-18',
+        '2026-02-19', '2026-02-20', '2026-02-23',
+        '2026-03-27',
+        '2026-04-30', '2026-05-01',
+        '2026-09-02',
+        # 2027
+        '2027-01-01',
+        '2027-02-05', '2027-02-06', '2027-02-07',
+        '2027-02-08', '2027-02-09', '2027-02-10',
+        '2027-04-16',
+        '2027-04-30', '2027-05-01', '2027-05-03',
+        '2027-09-02',
+    }
+
+
 def _trading_days_after(date_str, n):
     """
     Tính ngày giao dịch thứ N sau date_str.
     Bỏ qua: thứ 7, CN, và ngày lễ chính thức TTCK Việt Nam.
-
-    FIX: Phiên bản cũ chỉ bỏ T7/CN → T+2 trước Tết / 30-4 / 2-9 bị tính sai.
-    Ngày lễ được hardcode đến 2027 và cập nhật hàng năm.
-    Nguồn: Thông báo nghỉ lễ của HOSE/HNX hàng năm.
+    S23: dùng _get_vn_holidays() thay vì hardcode inline.
     """
-    # ── Ngày lễ TTCK Việt Nam (ngày GD nghỉ) ────────────────────────────────
-    # Format: 'YYYY-MM-DD'
-    # Ghi chú: nếu lễ trùng T7/CN, ngày nghỉ bù thường là T2 tuần sau — đã bao gồm.
-    VN_HOLIDAYS = {
-        # 2024
-        '2024-01-01',                                               # Tết Dương lịch
-        '2024-02-08', '2024-02-09', '2024-02-12', '2024-02-13',   # Tết Nguyên Đán + nghỉ bù
-        '2024-02-14', '2024-02-15', '2024-02-16',
-        '2024-04-18',                                               # Giỗ Tổ Hùng Vương (29/3 âm)
-        '2024-04-29', '2024-04-30',                                 # 30/4 + nghỉ bù
-        '2024-05-01',                                               # 1/5 Quốc tế Lao động
-        '2024-09-02', '2024-09-03',                                 # 2/9 + nghỉ bù
-        # 2025
-        '2025-01-01',                                               # Tết Dương lịch
-        '2025-01-27', '2025-01-28', '2025-01-29',                  # Tết Nguyên Đán
-        '2025-01-30', '2025-01-31', '2025-02-03',
-        '2025-04-07',                                               # Giỗ Tổ Hùng Vương
-        '2025-04-30', '2025-05-01', '2025-05-02',                  # 30/4 + 1/5 + nghỉ bù
-        '2025-09-01', '2025-09-02',                                 # 2/9 + nghỉ bù (T2)
-        # 2026
-        '2026-01-01', '2026-01-02',                                 # Tết Dương lịch + nghỉ bù
-        '2026-02-16', '2026-02-17', '2026-02-18',                  # Tết Nguyên Đán
-        '2026-02-19', '2026-02-20', '2026-02-23',
-        '2026-03-27',                                               # Giỗ Tổ Hùng Vương (ước tính)
-        '2026-04-30', '2026-05-01',                                 # 30/4 + 1/5
-        '2026-09-02',                                               # 2/9
-        # 2027
-        '2027-01-01',                                               # Tết Dương lịch
-        '2027-02-05', '2027-02-06', '2027-02-07',                  # Tết Nguyên Đán (ước tính)
-        '2027-02-08', '2027-02-09', '2027-02-10',
-        '2027-04-16',                                               # Giỗ Tổ Hùng Vương (ước tính)
-        '2027-04-30', '2027-05-01', '2027-05-03',                  # 30/4 + 1/5 + nghỉ bù
-        '2027-09-02',                                               # 2/9
-    }
-
+    VN_HOLIDAYS = _get_vn_holidays()
     dt = datetime.strptime(date_str, '%Y-%m-%d').date()
     count = 0
     while count < n:
         dt += timedelta(days=1)
         dt_str = dt.strftime('%Y-%m-%d')
-        if dt.weekday() < 5 and dt_str not in VN_HOLIDAYS:   # T2-T6 và không phải lễ
+        if dt.weekday() < 5 and dt_str not in VN_HOLIDAYS:
             count += 1
     return dt.strftime('%Y-%m-%d')
 
