@@ -8687,6 +8687,7 @@ def _load_data_retry(sym, chat_id, days=None, label=None, max_retry=2):
 def handle_signals(chat_id):
     def _run():
         try:
+            NL = chr(10)  # FIX S23: khai báo NL đầu _run() — dùng cho _fmt_buy_card
             send('Đang quét tín hiệu thị trường...', chat_id)
             # Regime warning ở đầu signals
             try:
@@ -8982,45 +8983,40 @@ def handle_signals(chat_id):
                         if entry_note:
                             entry_warn += ' — ' + entry_note
     
-                    # ── Per-symbol advisory notes (CTS EXPLORE, VND caution...) ──────
-                    _ps_note_txt = ''
+                    # ── Per-symbol advisory notes ──────────────────────────────
                     _ps_notes = item.get('_per_sym_notes', [])
-                    for _note in _ps_notes:
-                        _ps_note_txt += '\n &#x1F4A1; ' + _note
-    
-                    # ── Compact Scorecard v3 (Advisory) ──────────────────────────────
-                    _sc_line  = ''
-                    _sc_grade = None   # FIX (S16): lưu grade để guard paper trade
+
+                    # ── Compact Scorecard v3 (Advisory) ───────────────────────
+                    _sc_grade = None
                     if action == 'MUA' and _sc is not None:
                         try:
                             _sc_text, _sc_grade, _sc_err = _run_scorecard_v3_with_grade(
                                 sym, score_adj, item, compact=True
                             )
-                            if _sc_text:
-                                _sc_line = '\n' + _sc_text
-                            else:
-                                logger.warning(f'scorecard {sym}: {_sc_err}')
                         except Exception as _sc_ex:
                             logger.warning(f'scorecard {sym} exception: {_sc_ex}')
 
-                    # ── Trade Personality — hold style từ 3H analysis ─────────────────
-                    _personality_line = ''
+                    # ── Format signal ─────────────────────────────────────────
                     if action == 'MUA':
-                        _personality_line = _fmt_trade_personality(sym, _hold_d)
-
-                    msg += _fmt_buy_card(
-                        sym=sym, price=p, score=score_adj, action=action,
-                        sl_pct=meta['sl'], tp_pct=meta['tp'],
-                        hold_days=_hold_d, size_cap=_size_cap,
-                        vni_chg=(_vni_chg_today or 0),
-                        vol_ratio=float(item.get('vol_ratio', 1.0) or 1.0),
-                        ma20_dist=float(item.get('dist_ma20_pct') or 0),
-                        bf_active=_bf_skip, bf_reason=_bf_reason,
-                        source='ScoreA',
-                        bt_wr=None, bt_pf=int(meta.get('tp',14)/meta.get('sl',7)*10)/10,
-                        bt_n=None,
-                        extra_notes=(' | '.join(_ps_notes) if _ps_notes else ''),
-                    ) + NL
+                        # BF skip/reason đã được set trước (gate ở trên)
+                        # Nếu lệnh MUA đến đây thì _bf_skip = False
+                        msg += _fmt_buy_card(
+                            sym=sym, price=p, score=score_adj, action=action,
+                            sl_pct=meta['sl'], tp_pct=meta['tp'],
+                            hold_days=_hold_d, size_cap=_size_cap,
+                            vni_chg=(_vni_chg_today or 0),
+                            vol_ratio=float(item.get('vol_ratio', 1.0) or 1.0),
+                            ma20_dist=float(item.get('dist_ma20_pct') or 0),
+                            bf_active=False, bf_reason='',
+                            source='ScoreA',
+                            bt_wr=None,
+                            bt_pf=round(meta.get('tp', 14) / meta.get('sl', 7), 1),
+                            bt_n=None,
+                            extra_notes=(' | '.join(_ps_notes) if _ps_notes else ''),
+                        ) + NL
+                    else:
+                        # THEO_DOI — chỉ 1 dòng ngắn
+                        msg += f'👀 <b>{sym}</b> ({score}/100) — {action}\n'
                     if action == 'MUA':
                         buy_symbols.append({'symbol': sym, 'score': score})
                         item['_meta'] = meta
